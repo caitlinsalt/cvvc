@@ -1,0 +1,16 @@
+[package]
+name = "ryag"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
+flate2 = "1.1.5"
+futures = "0.3.31"
+hex = "0.4.3"
+indexmap = "2.12.1"
+rust-ini = "0.21.3"
+sha1 = "0.10.6"
