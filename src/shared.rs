@@ -145,12 +145,13 @@ impl Repository {
         name
     }
 
-    pub fn object_read(&self, sha: &str) -> Result<Option<StoredObject<'_>>, anyhow::Error> {
-        let path = self.file_unchecked(
+    pub fn object_read(&self, sha: &str) -> Result<Option<StoredObject>, anyhow::Error> {
+        let path = self.file(
             &["objects", &sha[..2], &sha[2..]]
                 .iter()
-                .collect::<PathBuf>(),
-        );
+                .collect::<PathBuf>(), false
+        )?;
+        let Some(path) = path else {return Ok(None);};
         if !path.is_file() {
             return Ok(None);
         }
@@ -196,7 +197,7 @@ impl Repository {
     }
 }
 
-pub trait GitObject<'a> {
+pub trait GitObject {
     type Implementation;
     fn object_type_code(&self) -> &'static [u8];
     fn serialise(&self, buf: &mut Vec<u8>);
@@ -205,12 +206,12 @@ pub trait GitObject<'a> {
         Self: Sized;
 }
 
-pub enum StoredObject<'a> {
+pub enum StoredObject {
     Blob(Blob),
-    Commit(Commit<'a>),
+    Commit(Commit),
 }
 
-impl StoredObject<'_> {
+impl StoredObject {
     pub fn serialise(&self, buf: &mut Vec<u8>) {
         match self {
             StoredObject::Blob(x) => x.serialise(buf),
@@ -220,7 +221,7 @@ impl StoredObject<'_> {
 }
 
 pub fn object_write<'a>(
-    obj: &impl GitObject<'a>,
+    obj: &impl GitObject,
     repo: Option<&Repository>,
 ) -> Result<Option<String>, anyhow::Error> {
     let mut data = Vec::<u8>::new();
@@ -271,7 +272,7 @@ impl Blob {
     }
 }
 
-impl GitObject<'_> for Blob {
+impl GitObject for Blob {
     type Implementation = Blob;
 
     fn object_type_code(&self) -> &'static [u8] {
@@ -292,19 +293,19 @@ impl GitObject<'_> for Blob {
         }
     }
 }
-pub struct Commit<'a> {
-    map: IndexMap<&'a str, Vec<String>>,
+pub struct Commit {
+    map: IndexMap<String, Vec<String>>,
     pub message: String,
 }
 
-impl Commit<'_> {
-    pub fn map(&self) -> &IndexMap<&str, Vec<String>> {
+impl Commit {
+    pub fn map(&self) -> &IndexMap<String, Vec<String>> {
         &self.map
     }
 }
 
-impl<'a> GitObject<'a> for Commit<'a> {
-    type Implementation = Commit<'a>;
+impl GitObject for Commit {
+    type Implementation = Commit;
 
     fn object_type_code(&self) -> &'static [u8] {
         b"commit"
@@ -317,25 +318,26 @@ impl<'a> GitObject<'a> for Commit<'a> {
     fn deserialise(data: &[u8]) -> Self::Implementation
         where
             Self: Sized {
-        let mut map = IndexMap::<&str, Vec<String>>::new();
+        let mut map = IndexMap::<String, Vec<String>>::new();
         let message = kvlm_parse(data, &mut map).expect("Failed to parse commit");
         Commit { map: map, message: message }
     }
 }
 
-pub fn kvlm_parse(raw_data: &[u8], map: &mut IndexMap<&str, Vec<String>>) -> Result<String, anyhow::Error> {
+pub fn kvlm_parse<'a>(raw_data: &'a [u8], map: &mut IndexMap<String, Vec<String>>) -> Result<String, anyhow::Error> {
     let space_index = raw_data.iter().position(|x| *x == 0x20);
     let nl_index = raw_data.iter().position(|x| *x == 0x0a);
 
     if space_index.is_none() || nl_index.unwrap_or_else(|| usize::max_value()) < space_index.unwrap() {
-        return Ok(String::from_utf8(raw_data[1..].to_vec())?);
+        let message = String::from_utf8(raw_data[1..].to_vec())?;
+        return Ok(message);
     }
     let space_index = space_index.unwrap();
 
     let key = str::from_utf8(&raw_data[0..space_index])?;
     let end = find_without(&raw_data[(space_index + 1)..], 0x0a, 0x20);
     let data_slice = str::from_utf8(match end {
-        Some(x) => &raw_data[(space_index + 1)..x],
+        Some(x) => &raw_data[(space_index + 1)..(space_index + 1 + x)],
         None => &raw_data[(space_index + 1)..]
     })?.replace("\n ", "\n");
     
@@ -343,16 +345,16 @@ pub fn kvlm_parse(raw_data: &[u8], map: &mut IndexMap<&str, Vec<String>>) -> Res
         map[key].push(data_slice);
     }
     else {
-        map[key] = vec!(data_slice);
+        map.insert(key.to_string(), vec!(data_slice));
     }
 
-    if end.is_some() && raw_data.len() > end.unwrap() + 1 {
-        return kvlm_parse(&raw_data[(end.unwrap() + 1)..], map);
+    if let Some(end) = end {
+        return kvlm_parse(&raw_data[(end + space_index + 2)..], map)
     }
     Ok(String::new())
 }
 
-pub fn kvlm_serialise(map: &IndexMap<&str, Vec<String>>, message: &str, buf: &mut Vec<u8>) {
+pub fn kvlm_serialise(map: &IndexMap<String, Vec<String>>, message: &str, buf: &mut Vec<u8>) {
     buf.clear();
     for k in map.keys() {
         if *k == "" {
