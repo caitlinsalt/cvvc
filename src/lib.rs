@@ -44,6 +44,16 @@ enum Commands {
         #[arg(default_value = ".", value_name = "PATH")]
         pathname: String,
     },
+    /// Pretty-print a tree object
+    #[command(name = "ls-tree")]
+    ListTree {
+        ///Recurse into sub-trees
+        #[arg(short)]
+        recursive: bool,
+        /// A tree-ish object
+        #[arg(value_name = "TREE")]
+        tree: String,
+    },
     /// Display the history of a given commit
     #[command()]
     Log {
@@ -57,13 +67,13 @@ pub fn parse_dispatch() {
     let args = Cli::parse();
     match args.command {
         Commands::CatFile { obj_type, obj_path } => objects::cat_file(&obj_type, &obj_path),
-
         Commands::HashObject {
             write,
             obj_type,
             filename,
         } => objects::object_hash(write, &obj_type, &filename),
         Commands::Init { pathname } => init::cmd(&pathname),
+        Commands::ListTree { recursive, tree } => objects::list_tree(recursive, &tree),
         Commands::Log { commit } => Ok(log::cmd(&commit)),
     }
     .expect("Error!")

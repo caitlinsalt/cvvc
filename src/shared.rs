@@ -4,9 +4,11 @@ use indexmap::IndexMap;
 use ini::Ini;
 use sha1::{Digest, Sha1};
 use std::{
+    cmp::Ordering,
     fs,
     io::{BufReader, Cursor, Read},
     path::{Path, PathBuf},
+    str::FromStr,
     u8,
 };
 
@@ -199,6 +201,9 @@ impl Repository {
             b"commit" => Ok(Some(StoredObject::Commit(Commit::deserialise(
                 &data[data_start_index..],
             )))),
+            b"tree" => Ok(Some(StoredObject::Tree(Tree::deserialise(
+                &data[data_start_index..],
+            )))),
             _ => Err(anyhow!(format!(
                 "Unrecognised object type {}",
                 std::str::from_utf8(object_type).unwrap_or("[mangled]")
@@ -219,6 +224,7 @@ pub trait GitObject {
 pub enum StoredObject {
     Blob(Blob),
     Commit(Commit),
+    Tree(Tree),
 }
 
 impl StoredObject {
@@ -226,6 +232,7 @@ impl StoredObject {
         match self {
             StoredObject::Blob(x) => x.serialise(buf),
             StoredObject::Commit(x) => x.serialise(buf),
+            StoredObject::Tree(x) => x.serialise(buf),
         }
     }
 }
@@ -466,4 +473,136 @@ fn find_without(data: &[u8], with: u8, without: u8) -> Option<usize> {
         }
     }
     Some(next_with)
+}
+
+pub struct TreeNode {
+    pub mode: u32,
+    pub path: PathBuf,
+    pub object_name: String,
+}
+
+pub struct TreeNodeParsingResult {
+    consumed: usize,
+    node: TreeNode,
+}
+
+impl TreeNode {
+    pub fn from_bytes(data: &[u8]) -> Result<TreeNodeParsingResult, anyhow::Error> {
+        let space_pos = data.iter().position(|x| *x == 0x20);
+        let Some(space_pos) = space_pos else {
+            return Err(anyhow!("Mode terminator character not found in tree entry"));
+        };
+        if space_pos != 5 && space_pos != 6 {
+            return Err(anyhow!("Mode field of tree entry is incorrect length"));
+        }
+        let mode_str = str::from_utf8(&data[..space_pos])
+            .context("Could not parse mode field of tree entry as valid UTF8")?;
+        let mode = u32::from_str_radix(mode_str, 8)
+            .context("Could not parse mode field of tree entry as valid octal integer")?;
+        let null_pos = &data[(space_pos + 1)..].iter().position(|x| *x == 0);
+        let Some(null_pos) = null_pos else {
+            return Err(anyhow!("Path terminator character not found in tree entry"));
+        };
+        if space_pos + null_pos + 21 >= data.len() {
+            return Err(anyhow!(
+                "Tree entry is too short to contain valid object name"
+            ));
+        }
+        let path = str::from_utf8(&data[(space_pos + 1)..(space_pos + null_pos + 1)])
+            .context("Could not parse path field of tree entry as valid UTF8")?;
+        let path_buf = PathBuf::from_str(path)?;
+        let object_name =
+            hex::encode(&data[(space_pos + null_pos + 2)..(space_pos + null_pos + 22)]);
+        Ok(TreeNodeParsingResult {
+            consumed: space_pos + null_pos + 22,
+            node: TreeNode {
+                mode: mode,
+                path: path_buf,
+                object_name: object_name,
+            },
+        })
+    }
+
+    pub fn compare(a: &TreeNode, b: &TreeNode) -> Ordering {
+        a.ordering_path().cmp(&b.ordering_path())
+    }
+
+    fn ordering_path(&self) -> String {
+        if self.mode >= 0o100000 {
+            self.path.to_string_lossy().to_string()
+        } else {
+            self.path.to_string_lossy().to_string() + "/"
+        }
+    }
+}
+
+pub struct Tree {
+    entries: Vec<TreeNode>,
+}
+
+impl Tree {
+    pub fn new() -> Tree {
+        Tree {
+            entries: Vec::<TreeNode>::new(),
+        }
+    }
+
+    pub fn entries(&self) -> &[TreeNode] {
+        &self.entries
+    }
+
+    pub fn _add_entry(&mut self, entry: TreeNode) {
+        self.entries.push(entry);
+        self.sort();
+    }
+
+    pub fn add_entries(&mut self, entries: &mut Vec<TreeNode>) {
+        self.entries.append(entries);
+        self.sort();
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, anyhow::Error> {
+        let mut entries = Vec::<TreeNode>::new();
+        let mut pos: usize = 0;
+        let data_len = data.len();
+        while pos < data_len {
+            let node = TreeNode::from_bytes(&data[pos..])?;
+            entries.push(node.node);
+            pos += node.consumed;
+        }
+
+        let mut tree = Self::new();
+        tree.add_entries(&mut entries);
+        Ok(tree)
+    }
+
+    fn sort(&mut self) {
+        self.entries.sort_by(|a, b| TreeNode::compare(a, b));
+    }
+}
+
+impl GitObject for Tree {
+    type Implementation = Tree;
+
+    fn object_type_code(&self) -> &'static [u8] {
+        b"tree"
+    }
+
+    fn serialise(&self, buf: &mut Vec<u8>) {
+        for entry in self.entries() {
+            let mode_str = format!("{:05o}", entry.mode);
+            buf.append(Vec::from_iter(mode_str.bytes()).as_mut());
+            buf.push(0x20);
+            buf.append(entry.path.to_string_lossy().as_bytes().to_vec().as_mut());
+            buf.push(0);
+            buf.append(hex::decode(&entry.object_name).unwrap().as_mut());
+        }
+    }
+
+    fn deserialise(data: &[u8]) -> Self::Implementation
+    where
+        Self: Sized,
+    {
+        Tree::from_bytes(data).unwrap()
+    }
 }
