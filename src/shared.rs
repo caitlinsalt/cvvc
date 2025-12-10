@@ -579,6 +579,29 @@ impl Tree {
     fn sort(&mut self) {
         self.entries.sort_by(|a, b| TreeNode::compare(a, b));
     }
+
+    pub fn checkout(&self, repo: &Repository, path: &PathBuf) -> Result<(), anyhow::Error> {
+        for entry in &self.entries {
+            let obj = repo.object_read(&entry.object_name)?;
+            let Some(obj) = obj else {
+                return Err(anyhow!("Object {} not found", entry.object_name));
+            };
+            let path = path.join(&entry.path);
+            match obj {
+                StoredObject::Tree(tree) => {
+                    fs::create_dir(&path)?;
+                    tree.checkout(repo, &path)?;
+                },
+                StoredObject::Blob(blob) => {
+                    fs::write(path, blob.data)?;
+                },
+                StoredObject::Commit(_) => {
+                    return Err(anyhow!("Submodules, like object {}, are not currently supported.", entry.object_name));
+                },
+            }
+        }
+        Ok(())
+    }
 }
 
 impl GitObject for Tree {

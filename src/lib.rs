@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod checkout;
 mod init;
 mod log;
 mod objects;
@@ -23,6 +24,16 @@ enum Commands {
         /// The object's ID
         #[arg(value_name = "OBJECT")]
         obj_path: String,
+    },
+    /// Checkout a commit
+    #[command(arg_required_else_help = true)]
+    Checkout {
+        /// The commit or tree to check out
+        #[arg(value_name = "COMMIT-OR-TREE")]
+        obj: String,
+        /// The directory to check out into
+        #[arg(value_name = "DIR", default_value = ".")]
+        path: String,
     },
     /// Compute object ID and optionally create an object from a file
     #[command(name = "hash-object")]
@@ -67,6 +78,7 @@ pub fn parse_dispatch() {
     let args = Cli::parse();
     match args.command {
         Commands::CatFile { obj_type, obj_path } => objects::cat_file(&obj_type, &obj_path),
+        Commands::Checkout { obj, path } => checkout::checkout(&obj, &path),
         Commands::HashObject {
             write,
             obj_type,
