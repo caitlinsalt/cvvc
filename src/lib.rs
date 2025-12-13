@@ -4,6 +4,7 @@ mod checkout;
 mod init;
 mod log;
 mod objects;
+mod refs;
 mod shared;
 
 #[derive(Parser)]
@@ -72,6 +73,9 @@ enum Commands {
         #[arg(default_value = "HEAD", value_name = "COMMIT")]
         commit: String,
     },
+    /// List references
+    #[command(name = "show-ref")]
+    ShowRef
 }
 
 pub fn parse_dispatch() {
@@ -87,6 +91,7 @@ pub fn parse_dispatch() {
         Commands::Init { pathname } => init::cmd(&pathname),
         Commands::ListTree { recursive, tree } => objects::list_tree(recursive, &tree),
         Commands::Log { commit } => Ok(log::cmd(&commit)),
+        Commands::ShowRef => refs::show_refs(),
     }
     .expect("Error!")
 }

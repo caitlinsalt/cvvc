@@ -37,7 +37,7 @@ fn checkout_from_repo(repo: &Repository, obj_name: &str, dest: &str) -> Result<(
             return Err(anyhow!("Object {} is not a commit-ish or tree-ish thing", obj_name));
         }
     };
-    let path = Path::new(dest).canonicalize()?;
+    let path = Path::new(dest);
     if path.exists() {
         if !path.is_dir() {
             return Err(anyhow!("Path {} is not a directory", dest));
@@ -50,7 +50,7 @@ fn checkout_from_repo(repo: &Repository, obj_name: &str, dest: &str) -> Result<(
         fs::create_dir_all(&path)?;
     }
 
-    tree_obj.checkout(repo, &path)
+    tree_obj.checkout(repo, &path.to_path_buf())
 }
 
 fn is_dir_empty(dir: &Path) -> Result<bool, anyhow::Error> {

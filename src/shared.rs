@@ -139,11 +139,20 @@ impl Repository {
     }
 
     pub fn dir(&self, path: &Path, mkdir: bool) -> Result<Option<PathBuf>, anyhow::Error> {
-        repo_dir(&self.git_dir, path, mkdir)
+         repo_dir(&self.git_dir, path, mkdir)
     }
 
     pub fn _dir_unchecked(&self, path: &Path) -> PathBuf {
         self.dir(path, false).unwrap().unwrap()
+    }
+
+    fn strip_git_dir(&self, path: &Path) -> PathBuf {
+        if path.starts_with(&self.git_dir) {
+            path.strip_prefix(&self.git_dir).unwrap().to_path_buf()
+        }
+        else {
+            path.to_path_buf()
+        }
     }
 
     pub fn find_object<'a>(&'a self, name: &'a str) -> &'a str {
@@ -209,6 +218,49 @@ impl Repository {
                 std::str::from_utf8(object_type).unwrap_or("[mangled]")
             ))),
         }
+    }
+
+    pub fn ref_resolve(&self, git_ref: &str) -> Result<Option<String>, anyhow::Error> {
+        let path = self.file(&PathBuf::from_iter(git_ref.split("/")), false)?;
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let ref_conts = fs::read_to_string(path)?;
+        if ref_conts.starts_with("ref: ") {
+            return self.ref_resolve(&ref_conts[5..].trim());
+        }
+        Ok(Some(ref_conts.trim().to_string()))
+    }
+
+    pub fn ref_list_dir(&self, path: Option<&Path>) -> Result<IndexMap<String, String>, anyhow::Error> {
+        let path = match path {
+            Some(p) => self.dir(p, false),
+            None => self.dir(Path::new("refs"), true),
+        };
+        let Ok(path) = path else {
+            return Err(path.err().unwrap());
+        };
+        let Some(path) = path else {
+            return Err(anyhow!("Ref path has disappeared"));
+        };
+        let dir_entries = fs::read_dir(&path).context(format!("Trying to read path {}", &path.to_string_lossy()))?.collect::<Result<Vec<_>, std::io::Error>>()?;
+        let mut files = dir_entries.iter().filter(|e| e.metadata().is_ok_and(|f| f.is_file())).map(|e| e.path()).collect::<Vec<PathBuf>>();
+        files.sort();
+        let mut dirs = dir_entries.iter().filter(|e| e.metadata().is_ok_and(|f| f.is_dir())).map(|e| e.path()).collect::<Vec<PathBuf>>();
+        dirs.sort();
+        let mut output = IndexMap::<String, String>::new();
+        for f in files {
+            let stripped_path = self.strip_git_dir(&f);
+            let ref_target = self.ref_resolve(&stripped_path.to_string_lossy())?;
+            if let Some(ref_target) = ref_target {
+                output.insert(stripped_path.to_string_lossy().to_string(), ref_target);
+            }
+        }
+        for d in dirs {
+            let mut rec_result = self.ref_list_dir(Some(&self.strip_git_dir(&d)))?;
+            output.append(&mut rec_result);
+        }
+        Ok(output)
     }
 }
 
