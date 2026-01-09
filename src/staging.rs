@@ -60,8 +60,16 @@ pub fn status() -> Result<(), anyhow::Error> {
     let repo = repo_find(Path::new("."))?;
     let Some(repo) = repo else { return Ok(()) };
     status_branch(&repo)?;
-    status_index(&repo)?;
-    status_worktree(&repo)?;
+    let staged_changes = status_index(&repo)?;
+    let unstaged_changes = status_worktree(&repo)?;
+    if unstaged_changes {
+        if !staged_changes {
+            println!("no changes added to commit (use \"ryag add\")");
+        }
+    } else if !staged_changes {
+        println!("nothing to commit, working tree clean");
+    }
+    println!("");
     Ok(())
 }
 
@@ -84,7 +92,7 @@ fn status_branch(repo: &Repository) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn status_index(repo: &Repository) -> Result<(), anyhow::Error> {
+fn status_index(repo: &Repository) -> Result<bool, anyhow::Error> {
     let mut to_print = Vec::<String>::new();
     let mut committed_tree = repo.flatten_head_tree()?;
     let index = repo.index_read()?;
@@ -101,17 +109,18 @@ fn status_index(repo: &Repository) -> Result<(), anyhow::Error> {
     for entry in committed_tree.keys() {
         to_print.push(format!("\tdeleted:    {}", entry));
     }
-    if to_print.len() > 0 {
+    let printable = to_print.len() > 0;
+    if printable {
         println!("Changes to be committed:");
         for line in to_print {
             println!("{line}");
         }
         println!("");
     }
-    Ok(())
+    Ok(printable)
 }
 
-fn status_worktree(repo: &Repository) -> Result<(), anyhow::Error> {
+fn status_worktree(repo: &Repository) -> Result<bool, anyhow::Error> {
     let ignore_info = repo.ignore_info_read()?;
     let mut files = Vec::<String>::new();
     let mut to_print = Vec::<String>::new();
@@ -157,7 +166,8 @@ fn status_worktree(repo: &Repository) -> Result<(), anyhow::Error> {
         }
         files.retain(|f| *f != entry.object_name);
     }
-    if to_print.len() > 0 {
+    let mut printable = to_print.len() > 0;
+    if printable {
         println!("Changes not staged for commit:");
         for line in to_print {
             println!("{line}");
@@ -165,10 +175,11 @@ fn status_worktree(repo: &Repository) -> Result<(), anyhow::Error> {
         println!("");
     }
     if files.len() > 0 {
+        printable = true;
         println!("Untracked files:");
         for f in files {
             println!("\t{f}");
         }
     }
-    Ok(())
+    Ok(printable)
 }
