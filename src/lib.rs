@@ -17,6 +17,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Add files to the repository
+    #[command()]
+    Add {
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
+    },
     /// Output the content of a repository object
     #[command(name = "cat-file", arg_required_else_help = true)]
     CatFile {
@@ -90,9 +96,9 @@ enum Commands {
     /// Remove files from the index and the working tree
     #[command(name = "rm")]
     Remove {
-        #[arg(long="cached")]
+        #[arg(long = "cached")]
         index_only: bool,
-        #[arg(long="ignore-unmatched")]
+        #[arg(long = "ignore-unmatched")]
         ignore_no_matches: bool,
         #[arg(value_name = "PATH")]
         paths: Vec<String>,
@@ -126,6 +132,7 @@ enum Commands {
 pub fn parse_dispatch() {
     let args = Cli::parse();
     match args.command {
+        Commands::Add { paths } => staging::add_files(&paths),
         Commands::CatFile { obj_type, obj_path } => objects::cat_file(&obj_type, &obj_path),
         Commands::CheckIgnore { paths } => staging::check_ignore(&paths),
         Commands::Checkout { obj, path } => checkout::checkout(&obj, &path),
@@ -138,7 +145,11 @@ pub fn parse_dispatch() {
         Commands::ListFiles { verbose } => staging::list_files(verbose),
         Commands::ListTree { recursive, tree } => objects::list_tree(recursive, &tree),
         Commands::Log { commit } => Ok(log::cmd(&commit)),
-        Commands::Remove { index_only, ignore_no_matches, paths } => staging::remove_files(&paths, index_only, ignore_no_matches),
+        Commands::Remove {
+            index_only,
+            ignore_no_matches,
+            paths,
+        } => staging::remove_files(&paths, index_only, ignore_no_matches),
         Commands::RevParse { name } => objects::rev_parse(&name),
         Commands::ShowRef => refs::show_refs(),
         Commands::Status => staging::status(),

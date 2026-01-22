@@ -5,11 +5,24 @@ use indexmap::IndexMap;
 use ini::Ini;
 use sha1::{Digest, Sha1};
 use std::{
-    cmp::Ordering, collections::HashMap, env, fs::{self, File}, io::{BufReader, Cursor, Read, Write}, iter::repeat_n, path::{Path, PathBuf}, str::FromStr
+    cmp::Ordering,
+    collections::HashMap,
+    env,
+    fmt::Display,
+    fs::{self, File},
+    io::{BufReader, Cursor, Read, Write},
+    iter::repeat_n,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use crate::shared::{
-    errors::{FindObjectError, InvalidIndexEntryError, InvalidIndexError, InvalidObjectError}, helpers::{datetime_to_bytes, path_translate}, ignore::{IgnoreInfo, IgnorePattern}
+    errors::{FindObjectError, InvalidIndexEntryError, InvalidIndexError, InvalidObjectError},
+    helpers::{
+        datetime_to_bytes,
+        fs::{path_translate, FileMetadata},
+    },
+    ignore::{IgnoreInfo, IgnorePattern},
 };
 
 mod errors;
@@ -538,7 +551,12 @@ impl Repository {
         Ok(map)
     }
 
-    pub fn remove_path(&self, path: &str, index: &mut Index, hard_delete: bool) -> Result<bool, anyhow::Error> {
+    pub fn remove_path(
+        &self,
+        path: &str,
+        index: &mut Index,
+        hard_delete: bool,
+    ) -> Result<bool, anyhow::Error> {
         let path = path_translate(Path::new(path));
         if !index.contains_path(&path) {
             return Ok(false);
@@ -546,9 +564,48 @@ impl Repository {
         index.remove(&path);
         if hard_delete {
             let abs_path = self.worktree_path(Path::new(&path));
-            fs::remove_file(&abs_path).context(format!("could not delete file {}", abs_path.display()))?;
+            fs::remove_file(&abs_path)
+                .context(format!("could not delete file {}", abs_path.display()))?;
         }
         Ok(true)
+    }
+
+    pub fn add_paths<T: AsRef<Path>>(&self, paths: &[T]) -> Result<(), anyhow::Error> {
+        let mut index = self.index_read()?;
+        for path in paths {
+            let new_entry = self.add_path_partial(path, &mut index)?;
+            if let Some(new_entry) = new_entry {
+                index.add_unsorted(new_entry);
+            }
+        }
+        index.sort();
+        self.index_write(&index)?;
+        Ok(())
+    }
+
+    /// Adds a path to the repository.  Removes any existing entry from the index, and returns a new index entry.  
+    fn add_path_partial<T: AsRef<Path>>(
+        &self,
+        path: T,
+        index: &mut Index,
+    ) -> Result<Option<IndexEntry>, anyhow::Error> {
+        let absolute_path = fs::canonicalize(path).context("could not make path valid")?;
+        if !absolute_path.starts_with(&self.worktree) {
+            return Err(anyhow!("path is outside the worktree"));
+        }
+        // Trying to add something inside the repo to the repo appears to be an error-free no-op in git
+        if absolute_path.starts_with(&self.git_dir) {
+            return Ok(None);
+        }
+        let relative_path = absolute_path.strip_prefix(&self.worktree)?;
+        let index_path = path_translate(relative_path);
+        let hash = object_hash_file(&absolute_path, "blob", Some(self))?;
+        index.remove(&index_path);
+        Ok(Some(IndexEntry::from_file(
+            &absolute_path,
+            hash,
+            index_path,
+        )?))
     }
 }
 
@@ -1129,13 +1186,87 @@ fn stored_object_matches_kind(kind: &ObjectKind, obj: &StoredObject) -> bool {
     }
 }
 
+#[derive(Debug)]
+pub enum IndexEntryType {
+    File,
+    Symlink,
+    Gitlink,
+}
+
+impl IndexEntryType {
+    pub fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            8 => Some(IndexEntryType::File),
+            10 => Some(IndexEntryType::Symlink),
+            14 => Some(IndexEntryType::Gitlink),
+            _ => None,
+        }
+    }
+
+    pub fn to_byte(&self) -> u8 {
+        match self {
+            IndexEntryType::File => 8,
+            IndexEntryType::Symlink => 10,
+            IndexEntryType::Gitlink => 14,
+        }
+    }
+}
+
+impl Display for IndexEntryType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            IndexEntryType::File => "regular file",
+            IndexEntryType::Symlink => "symbolic link",
+            IndexEntryType::Gitlink => "git link",
+        };
+        write!(f, "{str}")
+    }
+}
+
+#[derive(Debug)]
+pub enum IndexEntryPermissions {
+    Executable,
+    NonExecutable,
+    Link,
+}
+
+impl IndexEntryPermissions {
+    pub fn from_u16(v: u16) -> Option<Self> {
+        match v {
+            0o644 => Some(IndexEntryPermissions::NonExecutable),
+            0o755 => Some(IndexEntryPermissions::Executable),
+            0 => Some(IndexEntryPermissions::Link),
+            _ => None,
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            IndexEntryPermissions::Link => 0,
+            IndexEntryPermissions::NonExecutable => 0o644,
+            IndexEntryPermissions::Executable => 0o755,
+        }
+    }
+}
+
+impl Display for IndexEntryPermissions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            IndexEntryPermissions::Executable => "0755",
+            IndexEntryPermissions::NonExecutable => "0644",
+            IndexEntryPermissions::Link => "0000",
+        };
+        write!(f, "{str}")
+    }
+}
+
 pub struct IndexEntry {
     pub ctime: DateTime<Utc>,
     pub mtime: DateTime<Utc>,
     pub dev: u32,
     pub ino: u32,
-    pub mode_type: u16,
-    pub mode_perms: u16,
+    pub mode_type: IndexEntryType,
+    pub mode_perms: IndexEntryPermissions,
     pub uid: u32,
     pub gid: u32,
     pub fsize: u32,
@@ -1178,18 +1309,19 @@ impl IndexEntry {
         let dev = helpers::u32_from_be_bytes_unchecked(data, 16);
         let ino = helpers::u32_from_be_bytes_unchecked(data, 20);
         let mode = helpers::u16_from_be_bytes_unchecked(data, 26);
-        let mode_type = mode >> 12;
-        if mode_type != 0b1000 && mode_type != 0b1010 && mode_type != 0b1110 {
+        let mode_type_val = mode >> 12;
+        let mode_type = IndexEntryType::from_byte(mode_type_val as u8);
+        let Some(mode_type) = mode_type else {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::UnexpectedMode(mode_type),
+                error_kind: errors::InvalidIndexEntryKind::UnexpectedMode(mode_type_val),
             });
-        }
-        let mode_perms = mode & 0x1FF;
-        if mode_perms != 0 && mode_perms != 0o755 && mode_perms != 0o644 {
+        };
+        let mode_perms = IndexEntryPermissions::from_u16(mode & 0x1FF);
+        let Some(mode_perms) = mode_perms else {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::UnexpectedPermissions(mode_perms),
+                error_kind: errors::InvalidIndexEntryKind::UnexpectedPermissions(mode & 0x1FF),
             });
-        }
+        };
         let uid = helpers::u32_from_be_bytes_unchecked(data, 28);
         let gid = helpers::u32_from_be_bytes_unchecked(data, 32);
         let fsize = helpers::u32_from_be_bytes_unchecked(data, 36);
@@ -1237,12 +1369,36 @@ impl IndexEntry {
         })
     }
 
+    pub fn from_file(
+        path: &Path,
+        object_id: String,
+        index_ready_name: String,
+    ) -> Result<Self, anyhow::Error> {
+        let metadata = FileMetadata::from_path(path)?;
+        Ok(IndexEntry {
+            ctime: metadata.ctime,
+            mtime: metadata.mtime,
+            dev: metadata.dev,
+            ino: metadata.ino,
+            mode_type: metadata.mode_type,
+            mode_perms: metadata.mode_perms,
+            uid: metadata.uid,
+            gid: metadata.gid,
+            fsize: metadata.fsize,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id,
+            object_name: index_ready_name,
+        })
+    }
+
     pub fn serialise(&self, buf: &mut Vec<u8>) {
         buf.extend(datetime_to_bytes(&self.ctime));
         buf.extend(datetime_to_bytes(&self.mtime));
         buf.extend(self.dev.to_be_bytes());
         buf.extend(self.ino.to_be_bytes());
-        let mode = (((self.mode_type) << 12) | self.mode_perms) as u32;
+        let mode =
+            u32::from((u16::from(self.mode_type.to_byte()) << 12) | self.mode_perms.to_u16());
         buf.extend(mode.to_be_bytes());
         buf.extend(self.uid.to_be_bytes());
         buf.extend(self.gid.to_be_bytes());
@@ -1253,11 +1409,7 @@ impl IndexEntry {
         } else {
             buf.extend(repeat_n(0 as u8, 20));
         }
-        let mut flags: u16 = if self.flag_assume_valid {
-            0x8000
-        } else {
-            0
-        };
+        let mut flags: u16 = if self.flag_assume_valid { 0x8000 } else { 0 };
         flags |= (self.flag_stage as u16) << 12;
         let capped_len: u16 = if self.object_name.len() > 0xfff {
             0xfff
@@ -1272,6 +1424,33 @@ impl IndexEntry {
         buf.extend(repeat_n(0, 8 - ((self.object_name.len() + 63) % 8)));
     }
 }
+
+impl Ord for IndexEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.object_name.bytes().cmp(other.object_name.bytes()) {
+            Ordering::Equal => self.flag_stage.cmp(&other.flag_stage),
+            Ordering::Less => Ordering::Less,
+            Ordering::Greater => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for IndexEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for IndexEntry {
+    fn eq(&self, rhs: &Self) -> bool {
+        match self.cmp(rhs) {
+            Ordering::Equal => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for IndexEntry {}
 
 pub struct Index {
     pub version: u32,
@@ -1348,6 +1527,14 @@ impl Index {
         let start_len = self.entries.len();
         self.entries.retain(|e| e.object_name != path);
         start_len > self.entries.len()
+    }
+
+    pub fn add_unsorted(&mut self, entry: IndexEntry) {
+        self.entries.push(entry);
+    }
+
+    pub fn sort(&mut self) {
+        self.entries.sort();
     }
 }
 

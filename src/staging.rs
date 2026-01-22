@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use std::{fs, path::Path};
 
 use crate::shared::{
-    helpers::{path_translate, path_translate_rev, walk_fs_pruned},
+    helpers::fs::{path_translate, path_translate_rev, walk_fs_pruned},
     object_hash_file, repo_find, Repository,
 };
 
@@ -21,15 +21,7 @@ pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
     for entry in index.entries() {
         println!("{}", entry.object_name);
         if verbose {
-            let entry_type = match entry.mode_type {
-                0b1000 => "regular file",
-                0b1010 => "symlink",
-                0b1110 => "git link",
-                _ => {
-                    return Err(anyhow!("Unknown index entry mode {}", entry.mode_type));
-                }
-            };
-            println!("  {} with perms: {:04o}", entry_type, entry.mode_perms);
+            println!("  {} with perms: {}", entry.mode_type, entry.mode_perms);
             println!("  on blob {}", entry.object_id);
             println!("  size {}", entry.fsize);
             println!("  created {}, modified {}", entry.ctime, entry.mtime);
@@ -56,7 +48,11 @@ pub fn check_ignore(paths: &[String]) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub fn remove_files(paths: &[String], index_only: bool, ignore_no_matches: bool) -> Result<(), anyhow::Error> {
+pub fn remove_files(
+    paths: &[String],
+    index_only: bool,
+    ignore_no_matches: bool,
+) -> Result<(), anyhow::Error> {
     let repo = repo_find(Path::new("."))?;
     let Some(repo) = repo else { return Ok(()) };
     let mut some_removed = false;
@@ -72,6 +68,13 @@ pub fn remove_files(paths: &[String], index_only: bool, ignore_no_matches: bool)
     } else if !ignore_no_matches {
         return Err(anyhow!("no files removed"));
     }
+    Ok(())
+}
+
+pub fn add_files(paths: &[String]) -> Result<(), anyhow::Error> {
+    let repo = repo_find(Path::new("."))?;
+    let Some(repo) = repo else { return Ok(()) };
+    repo.add_paths(paths)?;
     Ok(())
 }
 

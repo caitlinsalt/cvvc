@@ -15,3 +15,7 @@ hex = "0.4.3"
 indexmap = "2.12.1"
 rust-ini = "0.21.3"
 sha1 = "0.10.6"
+
+[target."cfg(windows)".dependencies]
+is_executable = "1.0.5"
+nt-time = { version = "0.13.0", features = ["chrono"] }
