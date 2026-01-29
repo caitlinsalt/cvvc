@@ -31,7 +31,9 @@ pub fn add_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, k: &str, v: T) {
     if !map.contains_key(k) {
         map.insert(k.to_string(), Vec::<T>::new());
     }
-    if let Some(arr) = map.get_mut(k) { arr.push(v); }
+    if let Some(arr) = map.get_mut(k) {
+        arr.push(v);
+    }
 }
 
 pub fn add_parent_dirs_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, path: &str) {
