@@ -127,6 +127,12 @@ enum Commands {
         #[arg(default_value = "HEAD", value_name = "OBJECT")]
         target: String,
     },
+    /// Create a set of tree objects from the current index
+    #[command(name = "write-tree")]
+    WriteTree {
+        #[arg(long = "missing-ok")]
+        no_checks: bool,
+    },
 }
 
 pub fn parse_dispatch() {
@@ -161,6 +167,7 @@ pub fn parse_dispatch() {
             Some(tag_name) => refs::create_tag(&tag_name, &target, chunky),
             None => refs::show_tags(),
         },
+        Commands::WriteTree { no_checks } => staging::write_index(no_checks),
     }
     .expect("Error!")
 }

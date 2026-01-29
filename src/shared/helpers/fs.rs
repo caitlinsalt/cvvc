@@ -7,7 +7,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
-use crate::shared::{IndexEntryPermissions, IndexEntryType};
+use crate::shared::index::{IndexEntryPermissions, IndexEntryType};
 
 pub mod errors;
 
@@ -22,6 +22,24 @@ pub fn path_translate(path: &Path) -> String {
 /// Take a Git index path and convert it into an OS-specific path.
 pub fn path_translate_rev(path: &str) -> PathBuf {
     PathBuf::from_iter(path.split("/"))
+}
+
+pub fn index_path_parent(path: &str) -> &str {
+    if !path.contains('/') {
+        ""
+    } else {
+        let end = path.rfind('/').unwrap();
+        &path[..end]
+    }
+}
+
+pub fn index_path_file(path: &str) -> &str {
+    if !path.contains('/') {
+        path
+    } else {
+        let end = path.rfind('/').unwrap() + 1;
+        &path[end..]
+    }
 }
 
 pub fn walk_fs_pruned<'a>(

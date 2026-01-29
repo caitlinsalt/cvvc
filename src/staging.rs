@@ -207,3 +207,18 @@ fn status_worktree(repo: &Repository) -> Result<bool, anyhow::Error> {
     }
     Ok(printable)
 }
+
+pub fn write_index(no_checks: bool) -> Result<(), anyhow::Error> {
+    let repo = repo_find(Path::new("."))?;
+    let Some(repo) = repo else { return Ok(()) };
+    let index = repo.index_read()?;
+    if !no_checks {
+        if let Some(obj_id) = repo.check_index(&index)? {
+            eprintln!("Object {obj_id} is missing");
+            return Ok(());
+        }
+    }
+    let root_id = repo.store_index(&index)?;
+    println!("{root_id}");
+    Ok(())
+}

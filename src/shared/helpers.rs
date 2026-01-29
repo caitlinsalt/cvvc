@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, TimeZone};
+
+use crate::shared::helpers::fs::index_path_parent;
 
 pub mod fs;
 
@@ -21,4 +25,24 @@ where
         .chain(dt.timestamp_subsec_nanos().to_be_bytes().iter().map(|b| *b))
         .collect::<Vec<u8>>()
         .into_iter()
+}
+
+pub fn add_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, k: &str, v: T) {
+    if !map.contains_key(k) {
+        map.insert(k.to_string(), Vec::<T>::new());
+    }
+    if let Some(arr) = map.get_mut(k) { arr.push(v); }
+}
+
+pub fn add_parent_dirs_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, path: &str) {
+    let mut shrunk_path = path;
+    loop {
+        if !map.contains_key(shrunk_path) {
+            map.insert(shrunk_path.to_string(), Vec::new());
+        }
+        if shrunk_path == "" {
+            break;
+        }
+        shrunk_path = index_path_parent(shrunk_path);
+    }
 }

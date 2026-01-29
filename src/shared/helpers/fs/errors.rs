@@ -14,15 +14,18 @@ pub struct PathError {
 
 impl PathError {
     pub fn new<T: ToString>(path: T, kind: PathErrorKind) -> Self {
-        PathError { path: path.to_string(), kind }
+        PathError {
+            path: path.to_string(),
+            kind,
+        }
     }
 }
 
 impl Display for PathError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.kind {            
+        match self.kind {
             PathErrorKind::InvalidPath => write!(f, "invalid path '{}'", self.path),
-            PathErrorKind::PathOutsideRepo => write!(f, "path '{}' is outside the repo", self.path)
+            PathErrorKind::PathOutsideRepo => write!(f, "path '{}' is outside the repo", self.path),
         }
     }
 }
