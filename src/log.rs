@@ -1,8 +1,11 @@
-use crate::shared::{repo_find, Repository, StoredObject};
-use std::{collections::HashSet, path::Path};
+use crate::shared::{
+    objects::{ObjectKind, StoredObject},
+    repo::Repository,
+};
+use std::collections::HashSet;
 
 pub fn cmd(commit: &str) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."));
+    let repo = Repository::find_cwd();
     if let Ok(Some(the_repo)) = repo {
         log_from_repo(the_repo, commit)?;
     }
@@ -11,7 +14,7 @@ pub fn cmd(commit: &str) -> Result<(), anyhow::Error> {
 
 pub fn log_from_repo(repo: Repository, commit: &str) -> Result<(), anyhow::Error> {
     let mut seen = HashSet::<String>::new();
-    let starting_node = repo.find_object(commit, Some(crate::shared::ObjectKind::Commit), true)?;
+    let starting_node = repo.find_object(commit, Some(ObjectKind::Commit), true)?;
 
     println!("digraph ryaglog{{");
     println!("  node[shape=rect]");
@@ -30,7 +33,7 @@ pub fn log_object_graphviz<'a>(
     }
     seen.insert(String::from(object_name));
 
-    let commit = repo.object_read(object_name)?;
+    let commit = repo.read_object(object_name)?;
     if let Some(StoredObject::Commit(commit)) = commit {
         let message = commit
             .message

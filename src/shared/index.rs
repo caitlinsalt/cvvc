@@ -370,6 +370,10 @@ impl Index {
         start_len > self.entries.len()
     }
 
+    pub fn remove_not_present(&mut self, object_ids: &Vec<String>) {
+        self.entries.retain(|e| object_ids.contains(&e.object_id));
+    }
+
     pub fn add_unsorted(&mut self, entry: IndexEntry) {
         self.entries.push(entry);
     }

@@ -1,20 +1,23 @@
 use anyhow::anyhow;
 use std::{
     io::{stdout, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
-use crate::shared::{object_hash_file, repo_find, ObjectKind, Repository, StoredObject};
+use crate::shared::{
+    objects::{Blob, ObjectKind, RawObject, StoredObject},
+    repo::Repository,
+};
 
 pub fn rev_parse(obj_name: &str) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
     println!("{}", &repo.find_object(obj_name, None, true)?);
     Ok(())
 }
 
 pub fn cat_file(obj_type: &str, obj_name: &str) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     match repo {
         Some(repo) => cat_file_from_repo(repo, obj_type, obj_name),
         None => Ok(()),
@@ -36,7 +39,7 @@ fn cat_file_from_repo(
         }
     };
     let obj_hash = repo.find_object(obj_name, kind, false)?;
-    let obj = repo.object_read(&obj_hash)?;
+    let obj = repo.read_object(&obj_hash)?;
     if let Some(obj) = obj {
         let mut buf = Vec::<u8>::new();
         obj.serialise(&mut buf);
@@ -45,20 +48,19 @@ fn cat_file_from_repo(
     Ok(())
 }
 
-pub fn object_hash(write: bool, obj_type: &str, filename: &str) -> Result<(), anyhow::Error> {
-    let repo = if write {
-        repo_find(Path::new("."))?
-    } else {
-        None
-    };
-
-    let sha = object_hash_file(filename, obj_type, repo.as_ref())?;
-    println!("{}", sha);
+pub fn object_hash(write: bool, filename: &str) -> Result<(), anyhow::Error> {
+    let raw_object = RawObject::from_git_object(&Blob::new_from_path(filename)?);
+    println!("{}", raw_object.hash());
+    if write {
+        if let Some(repo) = Repository::find_cwd()? {
+            repo.write_raw_object(&raw_object)?;
+        }
+    }
     Ok(())
 }
 
 pub fn list_tree(recursive: bool, obj_name: &str) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else {
         return Err(anyhow!("Not a repository"));
     };
@@ -71,7 +73,7 @@ fn list_tree_recursive(
     obj_name: &str,
     prefix: Option<&PathBuf>,
 ) -> Result<(), anyhow::Error> {
-    let obj = repo.object_read(obj_name)?;
+    let obj = repo.read_object(obj_name)?;
     let Some(obj) = obj else {
         return Err(anyhow!("Item {obj_name} does not exist"));
     };
@@ -89,7 +91,7 @@ fn list_tree_recursive(
                 return Err(anyhow!(
                     "Unknown mode field {:o} found for tree item {}",
                     item.mode,
-                    item.object_name
+                    item.object_id
                 ));
             }
         };
@@ -100,10 +102,10 @@ fn list_tree_recursive(
             };
             println!(
                 "{:06o} {} {}\t{}",
-                item.mode, item_type, item.object_name, path_str
+                item.mode, item_type, item.object_id, path_str
             );
         } else {
-            list_tree_recursive(recursive, repo, &item.object_name, Some(&item.path))?;
+            list_tree_recursive(recursive, repo, &item.object_id, Some(&item.path))?;
         }
     }
     Ok(())

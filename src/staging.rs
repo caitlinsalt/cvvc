@@ -5,13 +5,14 @@ use std::{fs, path::Path, time::SystemTime};
 use crate::shared::{
     config::GlobalConfig,
     helpers::fs::{path_translate, path_translate_rev, walk_fs_pruned},
-    object_hash_file, object_write, repo_find, Commit, Repository,
+    objects::{Blob, Commit, RawObject},
+    repo::Repository,
 };
 
 pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
-    let index = repo.index_read()?;
+    let index = repo.read_index()?;
     if verbose {
         println!(
             "Index file format v{}, containing {} entries",
@@ -38,9 +39,9 @@ pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
 }
 
 pub fn check_ignore(paths: &[String]) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
-    let ignore_rules = repo.ignore_info_read()?;
+    let ignore_rules = repo.read_ignore_info()?;
     for path in paths {
         if ignore_rules.check(Path::new(path)) {
             println!("{path}");
@@ -54,18 +55,18 @@ pub fn remove_files(
     index_only: bool,
     ignore_no_matches: bool,
 ) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
     let mut some_removed = false;
-    let mut index = repo.index_read()?;
+    let mut index = repo.read_index()?;
     for path in paths {
-        if repo.remove_path(path, &mut index, !index_only)? {
+        if repo.remove_path_from_index(path, &mut index, !index_only)? {
             some_removed = true;
             println!("{path}");
         }
     }
     if some_removed {
-        repo.index_write(&index)?;
+        repo.write_index(&index)?;
     } else if !ignore_no_matches {
         return Err(anyhow!("no files removed"));
     }
@@ -73,14 +74,14 @@ pub fn remove_files(
 }
 
 pub fn add_files(paths: &[String]) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
-    repo.add_paths(paths)?;
+    repo.add_paths_to_index_and_write(paths)?;
     Ok(())
 }
 
 pub fn status() -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
     status_branch(&repo)?;
     let staged_changes = status_index(&repo)?;
@@ -103,7 +104,7 @@ fn status_branch(repo: &Repository) -> Result<(), anyhow::Error> {
             println!("On branch {name}");
         }
         None => {
-            let head_commit = repo.ref_resolve("HEAD")?;
+            let head_commit = repo.resolve_ref("HEAD")?;
             if let Some(head_commit) = head_commit {
                 println!("HEAD detached at {head_commit}");
             } else {
@@ -118,7 +119,7 @@ fn status_branch(repo: &Repository) -> Result<(), anyhow::Error> {
 fn status_index(repo: &Repository) -> Result<bool, anyhow::Error> {
     let mut to_print = Vec::<String>::new();
     let mut committed_tree = repo.flatten_head_tree()?;
-    let index = repo.index_read()?;
+    let index = repo.read_index()?;
     for entry in index.entries() {
         if committed_tree.contains_key(&entry.object_name) {
             if committed_tree[&entry.object_name] != entry.object_id {
@@ -144,10 +145,10 @@ fn status_index(repo: &Repository) -> Result<bool, anyhow::Error> {
 }
 
 fn status_worktree(repo: &Repository) -> Result<bool, anyhow::Error> {
-    let ignore_info = repo.ignore_info_read()?;
+    let ignore_info = repo.read_ignore_info()?;
     let mut files = Vec::<String>::new();
     let mut to_print = Vec::<String>::new();
-    let index = repo.index_read()?;
+    let index = repo.read_index()?;
 
     for f in walk_fs_pruned(&repo.worktree, &|p| {
         let rel_p = p.strip_prefix(&repo.worktree);
@@ -183,8 +184,8 @@ fn status_worktree(repo: &Repository) -> Result<bool, anyhow::Error> {
             };
             if ctimes_differ || entry.mtime != file_mtime {
                 // Timestamps differ; check content.
-                let new_id = object_hash_file(&entry_full_path, "blob", Some(repo))?;
-                if new_id != entry.object_id {
+                let raw_obj = RawObject::from_git_object(&Blob::new_from_path(&entry_full_path)?);
+                if raw_obj.hash() != entry.object_id {
                     to_print.push(format!("\tmodified:   {}", entry.object_name));
                 }
             }
@@ -209,15 +210,15 @@ fn status_worktree(repo: &Repository) -> Result<bool, anyhow::Error> {
     Ok(printable)
 }
 
-pub fn write_index(no_checks: bool) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+pub fn store_index_as_tree(no_checks: bool) -> Result<(), anyhow::Error> {
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
-    println!("{}", write_index_repo(&repo, no_checks)?);
+    println!("{}", store_index_as_tree_repo(&repo, no_checks)?);
     Ok(())
 }
 
-fn write_index_repo(repo: &Repository, no_checks: bool) -> Result<String, anyhow::Error> {
-    let index = repo.index_read()?;
+fn store_index_as_tree_repo(repo: &Repository, no_checks: bool) -> Result<String, anyhow::Error> {
+    let index = repo.read_index()?;
     if !no_checks {
         if let Some(obj_id) = repo.check_index(&index)? {
             return Err(anyhow!("Object {obj_id} is missing"));
@@ -232,7 +233,7 @@ pub fn create_commit_for_tree(
     message: &str,
     config: &GlobalConfig,
 ) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
     let parent_id = if !parents.is_empty() {
         Some(parents[0].as_str())
@@ -247,7 +248,7 @@ pub fn create_commit_for_tree(
         &DateTime::<Utc>::from(SystemTime::now()),
         message,
     );
-    let commit_id = object_write(&commit, Some(&repo))?;
+    let commit_id = repo.write_object(&commit)?;
     println!("{commit_id}");
     Ok(())
 }
@@ -267,15 +268,15 @@ fn create_commit_for_repo_tree(
         &DateTime::<Utc>::from(SystemTime::now()),
         message,
     );
-    let commit_id = object_write(&commit, Some(repo))?;
+    let commit_id = repo.write_object(&commit)?;
     Ok(commit_id)
 }
 
 pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
-    let tree_id = write_index_repo(&repo, false)?;
-    let parent_id = repo.ref_resolve("HEAD")?;
+    let tree_id = store_index_as_tree_repo(&repo, false)?;
+    let parent_id = repo.resolve_ref("HEAD")?;
     let commit_id = create_commit_for_repo_tree(
         &repo,
         &tree_id,
@@ -289,6 +290,6 @@ pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(),
     if let Some(branch) = current_branch {
         repo.update_branch(&branch, &commit_id)
     } else {
-        repo.update_head(&commit_id)
+        repo.update_head_detached(&commit_id)
     }
 }

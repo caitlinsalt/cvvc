@@ -172,9 +172,9 @@ pub fn parse_dispatch() {
         } => staging::create_commit_for_tree(&tree_id, &parents, &message, &config),
         Commands::HashObject {
             write,
-            obj_type,
+            obj_type: _,
             filename,
-        } => objects::object_hash(write, &obj_type, &filename),
+        } => objects::object_hash(write, &filename),
         Commands::Init { pathname } => init::cmd(&pathname),
         Commands::ListFiles { verbose } => staging::list_files(verbose),
         Commands::ListTree { recursive, tree } => objects::list_tree(recursive, &tree),
@@ -195,7 +195,7 @@ pub fn parse_dispatch() {
             Some(tag_name) => refs::create_tag(&tag_name, &target, chunky),
             None => refs::show_tags(),
         },
-        Commands::WriteTree { no_checks } => staging::write_index(no_checks),
+        Commands::WriteTree { no_checks } => staging::store_index_as_tree(no_checks),
     }
     .expect("Error!")
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::shared::Repository;
+use crate::shared::repo::Repository;
 
 pub fn cmd(pathname: &str) -> Result<(), anyhow::Error> {
     println!("Creating repository {pathname}");

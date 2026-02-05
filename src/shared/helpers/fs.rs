@@ -1,6 +1,7 @@
+use anyhow::{anyhow, Context};
 use std::{
     collections::VecDeque,
-    fs::{Metadata, OpenOptions, ReadDir},
+    fs::{create_dir_all, Metadata, OpenOptions, ReadDir},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -47,6 +48,20 @@ pub fn write_single_line<T: AsRef<Path>>(path: T, content: &str) -> Result<(), a
     writeln!(file, "{content}")?;
     file.flush()?;
     Ok(())
+}
+
+pub fn check_and_create_dir(path: PathBuf, mkdir: bool) -> Result<Option<PathBuf>, anyhow::Error> {
+    if path.exists() {
+        if path.is_dir() {
+            return Ok(Some(path));
+        }
+        return Err(anyhow!("Path exists but is not a directory"));
+    }
+    if mkdir {
+        create_dir_all(&path).context("Could not create all components of directory path")?;
+        return Ok(Some(path));
+    }
+    Ok(None)
 }
 
 pub fn walk_fs_pruned<'a>(

@@ -1,5 +1,8 @@
+use anyhow::Context;
 use glob::Pattern;
 use std::{collections::HashMap, path::Path};
+
+use crate::shared::objects::Blob;
 
 pub struct IgnorePattern {
     patterns: Vec<Pattern>,
@@ -79,8 +82,36 @@ pub struct IgnoreInfo {
 }
 
 impl IgnoreInfo {
-    pub fn new(absolute: Vec<IgnorePattern>, scoped: HashMap<String, Vec<IgnorePattern>>) -> Self {
+    pub fn _new(absolute: Vec<IgnorePattern>, scoped: HashMap<String, Vec<IgnorePattern>>) -> Self {
         IgnoreInfo { absolute, scoped }
+    }
+
+    pub fn from_files<P: AsRef<Path>, Q: AsRef<Path>>(
+        global_file: Option<P>,
+        repo_file: Option<Q>,
+        scoped_files: HashMap<String, Blob>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut absolute_ignores = Vec::<IgnorePattern>::new();
+        if let Some(repo_exclude_file) = repo_file {
+            absolute_ignores.append(&mut read_ignore_file(repo_exclude_file)?);
+        }
+        if let Some(global_exclude_file) = global_file {
+            absolute_ignores.append(&mut read_ignore_file(global_exclude_file)?);
+        }
+        let mut dir_ignores = HashMap::<String, Vec<IgnorePattern>>::new();
+        for entry in scoped_files.into_iter() {
+            dir_ignores.insert(
+                entry.0,
+                String::from_utf8_lossy(entry.1.data())
+                    .lines()
+                    .filter_map(IgnorePattern::from_str)
+                    .collect(),
+            );
+        }
+        Ok(Self {
+            absolute: absolute_ignores,
+            scoped: dir_ignores,
+        })
     }
 
     // true for ignore, false for include
@@ -136,6 +167,14 @@ impl IgnoreInfo {
     }
 }
 
+fn read_ignore_file<P: AsRef<Path>>(path: P) -> Result<Vec<IgnorePattern>, anyhow::Error> {
+    let file_contents = std::fs::read_to_string(path).context("error reading ignore file")?;
+    Ok(file_contents
+        .lines()
+        .filter_map(IgnorePattern::from_str)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,7 +184,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -159,7 +198,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -173,7 +212,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/test");
 
         let result = test_info.check_scoped(test_path);
@@ -187,7 +226,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/test");
 
         let result = test_info.check_scoped(test_path);
@@ -201,7 +240,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/b/c/d/test");
 
         let result = test_info.check_scoped(test_path);
@@ -215,7 +254,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/b/c/d/test");
 
         let result = test_info.check_scoped(test_path);
@@ -229,7 +268,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test/a");
 
         let result = test_info.check_scoped(test_path);
@@ -243,7 +282,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test/a");
 
         let result = test_info.check_scoped(test_path);
@@ -257,7 +296,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/test/a");
 
         let result = test_info.check_scoped(test_path);
@@ -271,7 +310,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/test");
 
         let result = test_info.check_scoped(test_path);
@@ -285,7 +324,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/test");
 
         let result = test_info.check_scoped(test_path);
@@ -299,7 +338,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/a/test");
 
         let result = test_info.check_scoped(test_path);
@@ -313,7 +352,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/a/test");
 
         let result = test_info.check_scoped(test_path);
@@ -327,7 +366,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/a/b/c/d/test");
 
         let result = test_info.check_scoped(test_path);
@@ -341,7 +380,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/a/b/c/d/test");
 
         let result = test_info.check_scoped(test_path);
@@ -355,7 +394,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/test/a");
 
         let result = test_info.check_scoped(test_path);
@@ -369,7 +408,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/test/a");
 
         let result = test_info.check_scoped(test_path);
@@ -383,7 +422,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/a/test/a");
 
         let result = test_info.check_scoped(test_path);
@@ -397,7 +436,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -410,7 +449,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert("sub".to_string(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -423,7 +462,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("te/st").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("te/st");
 
         let result = test_info.check_scoped(test_path);
@@ -437,7 +476,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!te/st").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("te/st");
 
         let result = test_info.check_scoped(test_path);
@@ -451,7 +490,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("te/st").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("te/st/file");
 
         let result = test_info.check_scoped(test_path);
@@ -465,7 +504,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!te/st").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("te/st/file");
 
         let result = test_info.check_scoped(test_path);
@@ -479,7 +518,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("te/st").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/te/st");
 
         let result = test_info.check_scoped(test_path);
@@ -492,7 +531,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("/test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -506,7 +545,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!/test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -520,7 +559,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("/test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test/file");
 
         let result = test_info.check_scoped(test_path);
@@ -534,7 +573,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test/file");
 
         let result = test_info.check_scoped(test_path);
@@ -548,7 +587,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("/test").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("sub/test");
 
         let result = test_info.check_scoped(test_path);
@@ -561,7 +600,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test/").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test/");
 
         let result = test_info.check_scoped(test_path);
@@ -575,7 +614,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test/").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test/");
 
         let result = test_info.check_scoped(test_path);
@@ -589,7 +628,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test/").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -602,7 +641,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test/").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("test");
 
         let result = test_info.check_scoped(test_path);
@@ -615,7 +654,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("test/").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/b/test/");
 
         let result = test_info.check_scoped(test_path);
@@ -629,7 +668,7 @@ mod tests {
         let test_pattern = IgnorePattern::from_str("!test/").unwrap();
         let mut scoped_map = HashMap::<String, Vec<IgnorePattern>>::new();
         scoped_map.insert(String::new(), vec![test_pattern]);
-        let test_info = IgnoreInfo::new(Vec::<IgnorePattern>::new(), scoped_map);
+        let test_info = IgnoreInfo::_new(Vec::<IgnorePattern>::new(), scoped_map);
         let test_path = Path::new("a/b/test/");
 
         let result = test_info.check_scoped(test_path);

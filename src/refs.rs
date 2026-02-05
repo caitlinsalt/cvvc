@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use indexmap::IndexMap;
 
-use crate::shared::{object_write, repo_find, Repository, Tag};
+use crate::shared::{objects::Tag, repo::Repository};
 
 pub fn show_refs() -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     match repo {
         Some(repo) => show_refs_in_repo(&repo),
         None => Ok(()),
@@ -13,7 +13,7 @@ pub fn show_refs() -> Result<(), anyhow::Error> {
 }
 
 pub fn show_tags() -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     match repo {
         Some(repo) => show_tags_in_repo(&repo),
         None => Ok(()),
@@ -21,21 +21,21 @@ pub fn show_tags() -> Result<(), anyhow::Error> {
 }
 
 pub fn create_tag(name: &str, target: &str, chunky: bool) -> Result<(), anyhow::Error> {
-    let repo = repo_find(Path::new("."))?;
+    let repo = Repository::find_cwd()?;
     let Some(repo) = repo else { return Ok(()) };
     let absolute_target = repo.find_object(target, None, true)?;
     if chunky {
         create_chunky_tag(&repo, name, target)
     } else {
-        repo.ref_create(&format!("tags/{name}"), &absolute_target)
+        repo.create_ref(&format!("tags/{name}"), &absolute_target)
     }
 }
 
 fn create_chunky_tag(repo: &Repository, name: &str, target: &str) -> Result<(), anyhow::Error> {
     let tag = Tag::create(target, name);
-    let tag_id = object_write(&tag, Some(repo))?;
+    let tag_id = repo.write_object(&tag)?;
     let name = format!("tags/{name}");
-    repo.ref_create(&name, &tag_id)
+    repo.create_ref(&name, &tag_id)
 }
 
 fn show_refs_in_repo(repo: &Repository) -> Result<(), anyhow::Error> {

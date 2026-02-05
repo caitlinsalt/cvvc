@@ -1,0 +1,769 @@
+use anyhow::{anyhow, Context};
+use flate2::{bufread::ZlibEncoder, read::ZlibDecoder, Compression};
+use indexmap::IndexMap;
+use ini::Ini;
+use std::{
+    collections::HashMap,
+    env,
+    fs::{self, File},
+    io::{BufReader, Cursor, Read, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
+use crate::shared::{
+    config::default_repo_config,
+    errors::FindObjectError,
+    helpers::{
+        add_parent_dirs_to_map_of_vecs, add_to_map_of_vecs,
+        fs::{
+            check_and_create_dir,
+            errors::{PathError, PathErrorKind},
+            index_path_file, index_path_parent, path_translate, write_single_line,
+        },
+    },
+    ignore::IgnoreInfo,
+    index::{Index, IndexEntry},
+    objects::{
+        stored_object_matches_kind, Blob, Commit, GitObject, ObjectKind, RawObject, StoredObject,
+        Tag, Tree, TreeNode,
+    },
+};
+
+pub struct Repository {
+    pub worktree: PathBuf,
+    pub git_dir: PathBuf,
+    config: Ini,
+}
+
+impl Repository {
+    pub fn find<P: AsRef<Path>>(path: P) -> Result<Option<Self>, anyhow::Error> {
+        let path_buf = path.as_ref().canonicalize()?;
+        if path_buf.join(Path::new(".git")).is_dir() {
+            return Ok(Some(Self::new(path_buf, false)?));
+        }
+        match path_buf.parent() {
+            Some(p) => Self::find(p),
+            None => Ok(None),
+        }
+    }
+
+    pub fn find_cwd() -> Result<Option<Self>, anyhow::Error> {
+        Self::find(env::current_dir()?)
+    }
+
+    pub fn new<P: AsRef<Path>>(worktree: P, allow_invalid: bool) -> Result<Self, anyhow::Error> {
+        let worktree = worktree.as_ref().canonicalize()?;
+        let git_dir = worktree.join(Path::new(".git"));
+        if !(allow_invalid || git_dir.is_dir()) {
+            return Err(anyhow!("Not a git directory"));
+        }
+        let config_path = git_dir.join("config");
+        let mut wrapped_config: Option<Ini> = None;
+        if config_path.is_file() {
+            let loaded_config = Ini::load_from_file(config_path);
+            if let Err(lce) = loaded_config {
+                if !allow_invalid {
+                    return Err(
+                        anyhow::Error::from(lce).context("Could not open configuration file")
+                    );
+                }
+            } else {
+                wrapped_config = Some(loaded_config.unwrap());
+            }
+        } else if !allow_invalid {
+            return Err(anyhow!("Configuration file missing"));
+        }
+
+        let config = wrapped_config.unwrap_or_else(default_repo_config);
+
+        if !allow_invalid {
+            let core_section = match config.section(Some("core")) {
+                Some(s) => s,
+                None => {
+                    return Err(anyhow!(
+                        "Configuration file does not contain a [core] section"
+                    ))
+                }
+            };
+            let format_version_property = match core_section.get("repositoryformatversion") {
+                Some(s) => s,
+                None => {
+                    return Err(anyhow!(
+                        "Configuration file does not have the repository format version set"
+                    ))
+                }
+            };
+            let format_version = format_version_property
+                .parse::<i32>()
+                .context("repositoryformatversion is not an integer")?;
+            if format_version != 0 {
+                return Err(anyhow!("Unsupported repository version {format_version}"));
+            }
+        }
+
+        Ok(Repository {
+            worktree,
+            git_dir,
+            config,
+        })
+    }
+
+    pub fn create(path: &PathBuf) -> Result<Self, anyhow::Error> {
+        let repo = Repository::new(path, true)?;
+
+        if repo.worktree.exists() {
+            if !repo.worktree.is_dir() {
+                return Err(anyhow!(format!(
+                    "Path {} is not a directory",
+                    repo.worktree.display()
+                )));
+            }
+            if !repo.git_dir.exists() {
+                return Err(anyhow!(format!(
+                    "Path {} is not a directory",
+                    repo.git_dir.display()
+                )));
+            }
+            let mut dir_contents = repo
+                .git_dir
+                .read_dir()
+                .context("Could not attempt to read contents of repository")?;
+            if dir_contents.next().is_some() {
+                return Err(anyhow!("Repository directory is not empty"));
+            }
+        } else {
+            fs::create_dir_all(&repo.worktree)
+                .context("Could not create all components of directory path")?;
+        }
+
+        repo.dir(Path::new("branches"), true)?;
+        repo.dir(Path::new("objects"), true)?;
+        repo.dir(&["refs", "tags"].iter().collect::<PathBuf>(), true)?;
+        repo.dir(&["refs", "heads"].iter().collect::<PathBuf>(), true)?;
+
+        fs::write(
+            repo.file_unchecked(Path::new("description")),
+            "Unnamed repository\n",
+        )?;
+
+        fs::write(
+            repo.file_unchecked(Path::new("HEAD")),
+            "ref: refs/heads/main\n",
+        )?;
+
+        repo.config
+            .write_to_file(repo.file_unchecked(Path::new("config")))?;
+
+        Ok(repo)
+    }
+
+    pub fn path(&self, path: &Path) -> PathBuf {
+        self.git_dir.join(path)
+    }
+
+    pub fn worktree_path<T: AsRef<Path> + ToString>(&self, path: T) -> Result<PathBuf, PathError> {
+        let abs_path = match fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(_) => return Err(PathError::new(path, PathErrorKind::InvalidPath)),
+        };
+        if !abs_path.starts_with(&self.worktree) {
+            return Err(PathError::new(path, PathErrorKind::PathOutsideRepo));
+        }
+        match abs_path.strip_prefix(&self.worktree) {
+            Ok(p) => Ok(p.to_path_buf()),
+            Err(_) => Err(PathError::new(path, PathErrorKind::PathOutsideRepo)),
+        }
+    }
+
+    pub fn canon_path<T: AsRef<Path> + ToString>(&self, path: T) -> Result<PathBuf, PathError> {
+        let abs_path = match fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(_) => return Err(PathError::new(path, PathErrorKind::InvalidPath)),
+        };
+        if !abs_path.starts_with(&self.worktree) {
+            return Err(PathError::new(path, PathErrorKind::PathOutsideRepo));
+        }
+        Ok(abs_path)
+    }
+
+    pub fn file(&self, path: &Path, mkdir: bool) -> Result<Option<PathBuf>, anyhow::Error> {
+        let file_name = path.file_name();
+        if file_name.is_none() {
+            return Err(anyhow!("Path must not be a directory"));
+        }
+        let base_path = path.parent().unwrap_or(Path::new(""));
+        let dir_path = self.dir(base_path, mkdir)?;
+        Ok(dir_path.map(|p| p.join(file_name.unwrap())))
+    }
+
+    pub fn file_unchecked(&self, path: &Path) -> PathBuf {
+        self.file(path, false).unwrap().unwrap()
+    }
+
+    pub fn dir(&self, path: &Path, mkdir: bool) -> Result<Option<PathBuf>, anyhow::Error> {
+        let path = self.git_dir.join(path);
+        check_and_create_dir(path, mkdir)
+    }
+
+    pub fn _dir_unchecked(&self, path: &Path) -> PathBuf {
+        self.dir(path, false).unwrap().unwrap()
+    }
+
+    fn strip_git_dir(&self, path: &Path) -> PathBuf {
+        if path.starts_with(&self.git_dir) {
+            path.strip_prefix(&self.git_dir).unwrap().to_path_buf()
+        } else {
+            path.to_path_buf()
+        }
+    }
+
+    pub fn find_object(
+        &self,
+        name: &str,
+        kind: Option<ObjectKind>,
+        follow_tags: bool,
+    ) -> Result<String, anyhow::Error> {
+        let resolve_result = self.resolve_object(name)?;
+        if resolve_result.is_empty() {
+            return Err(anyhow::Error::from(FindObjectError::none()));
+        }
+        if resolve_result.len() > 1 {
+            return Err(anyhow::Error::from(FindObjectError::some(&resolve_result)));
+        }
+        let Some(kind) = kind else {
+            return Ok(resolve_result[0].to_string());
+        };
+        let mut current_target = resolve_result[0].to_string();
+        loop {
+            let obj = self.read_object(&current_target)?;
+            let Some(obj) = obj else {
+                return Err(anyhow::Error::from(FindObjectError::none()));
+            };
+            if stored_object_matches_kind(&kind, &obj) {
+                return Ok(current_target);
+            }
+            if !follow_tags {
+                return Err(anyhow::Error::from(FindObjectError::none()));
+            }
+            match obj {
+                StoredObject::Tag(tag) => {
+                    current_target = tag.target().context("chunky tag has invalid target")?;
+                }
+                StoredObject::Commit(commit) => {
+                    if let ObjectKind::Tree = kind {
+                        current_target = commit.tree().context("commit has no tree")?;
+                    }
+                }
+                _ => {
+                    return Err(anyhow::Error::from(FindObjectError::none()));
+                }
+            }
+        }
+    }
+
+    fn resolve_object(&self, name: &str) -> Result<Vec<String>, anyhow::Error> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(Vec::<String>::new());
+        }
+
+        if name == "HEAD" {
+            let head_ref = self.resolve_ref(name)?;
+            return match head_ref {
+                Some(hr) => Ok(vec![hr]),
+                None => Err(anyhow!("Error: missing HEAD")),
+            };
+        }
+
+        let mut collected = Vec::<String>::new();
+        if is_partial_object_id(name) {
+            let path = self.dir(&["objects", &name[..2]].iter().collect::<PathBuf>(), false)?;
+            if let Some(path) = path {
+                let dir_entries = fs::read_dir(&path)
+                    .context(format!("Trying to read path {}", &path.to_string_lossy()))?
+                    .collect::<Result<Vec<_>, std::io::Error>>()?;
+                for mut f in dir_entries
+                    .iter()
+                    .map(|e| e.file_name().into_string().unwrap_or("".to_owned()))
+                    .filter(|f| f.starts_with(&name[2..]) && is_object_file_name(f))
+                {
+                    f.insert_str(0, &name[..2]);
+                    collected.push(f);
+                }
+            }
+        }
+
+        let potential_tag = self.resolve_ref(&("refs/tags/".to_string() + name))?;
+        if let Some(potential_tag) = potential_tag {
+            collected.push(potential_tag);
+        }
+
+        let potential_branch = self.resolve_ref(&("refs/heads/".to_string() + name))?;
+        if let Some(potential_branch) = potential_branch {
+            collected.push(potential_branch);
+        }
+
+        let potential_remote_branch = self.resolve_ref(&("refs/remotes/".to_string() + name))?;
+        if let Some(potential_remote_branch) = potential_remote_branch {
+            collected.push(potential_remote_branch);
+        }
+
+        Ok(collected)
+    }
+
+    pub fn read_object(&self, sha: &str) -> Result<Option<StoredObject>, anyhow::Error> {
+        let path = self.file(
+            &["objects", &sha[..2], &sha[2..]]
+                .iter()
+                .collect::<PathBuf>(),
+            false,
+        )?;
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let file = fs::File::open(path)?;
+        let mut decompressor = ZlibDecoder::new(file);
+        let mut data: Vec<u8> = vec![];
+        decompressor.read_to_end(&mut data)?;
+        let type_end_index = data.iter().position(|&x| x == 0x20).ok_or(anyhow!(
+            "Malformed object {sha}: end of object type code not found"
+        ))?;
+        let len_start_index = type_end_index + 1;
+        let len_end_index = data
+            .iter()
+            .skip(len_start_index)
+            .position(|&x| x == 0)
+            .ok_or(anyhow!(
+                "Malformed object {sha}: end of object length not found"
+            ))?
+            + len_start_index;
+        let data_start_index = len_end_index + 1;
+        let object_type = &data[..type_end_index];
+        let object_len = std::str::from_utf8(&data[len_start_index..len_end_index])?
+            .parse::<usize>()
+            .context(format!(
+                "Could not parse object length!  Object length string was {}",
+                std::str::from_utf8(&data[len_start_index..len_end_index])?
+            ))?;
+        let actual_len = data.len() - data_start_index;
+        if object_len != actual_len {
+            return Err(anyhow!(
+                "Malformed object {sha}: expected length {object_len}, actual length {actual_len}"
+            ));
+        }
+
+        match object_type {
+            b"blob" => Ok(Some(StoredObject::Blob(Blob::deserialise(
+                &data[data_start_index..],
+            )))),
+            b"commit" => Ok(Some(StoredObject::Commit(Commit::deserialise(
+                &data[data_start_index..],
+            )))),
+            b"tree" => Ok(Some(StoredObject::Tree(Tree::deserialise(
+                &data[data_start_index..],
+            )))),
+            b"tag" => Ok(Some(StoredObject::Tag(Tag::deserialise(
+                &data[data_start_index..],
+            )))),
+            _ => Err(anyhow!(format!(
+                "Unrecognised object type {}",
+                std::str::from_utf8(object_type).unwrap_or("[mangled]")
+            ))),
+        }
+    }
+
+    pub fn write_raw_object(&self, obj: &RawObject) -> Result<String, anyhow::Error> {
+        let path = self.file(
+            &["objects", obj.hash_prefix(), obj.hash_tail()]
+                .iter()
+                .collect::<PathBuf>(),
+            true,
+        )?;
+        if let Some(path) = path {
+            if !path.exists() {
+                let mut file = fs::File::create(path)?;
+                let mut compressor = ZlibEncoder::new(
+                    BufReader::new(Cursor::new(obj.content())),
+                    Compression::best(),
+                );
+                std::io::copy(&mut compressor, &mut file)?;
+            }
+        }
+        Ok(obj.hash().to_string())
+    }
+
+    pub fn write_object(&self, obj: &impl GitObject) -> Result<String, anyhow::Error> {
+        self.write_raw_object(&RawObject::from_git_object(obj))
+    }
+
+    pub fn resolve_ref(&self, git_ref: &str) -> Result<Option<String>, anyhow::Error> {
+        let path = self.file(&PathBuf::from_iter(git_ref.split("/")), false)?;
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        if !path.exists() {
+            return Ok(None);
+        }
+        let ref_conts = fs::read_to_string(path)?;
+        if let Some(ref_target) = ref_conts.strip_prefix("ref: ") {
+            return self.resolve_ref(ref_target.trim());
+        }
+        Ok(Some(ref_conts.trim().to_string()))
+    }
+
+    pub fn ref_list_dir(
+        &self,
+        path: Option<&Path>,
+    ) -> Result<IndexMap<String, String>, anyhow::Error> {
+        let (path, root_path) = match path {
+            Some(p) => (p, Some(&p.to_path_buf())),
+            None => (Path::new("refs"), None),
+        };
+        self.ref_list_dir_internal(path, root_path)
+    }
+
+    fn ref_list_dir_internal(
+        &self,
+        path: &Path,
+        root_path: Option<&PathBuf>,
+    ) -> Result<IndexMap<String, String>, anyhow::Error> {
+        let path = self.dir(path, true);
+        let Ok(path) = path else {
+            return Err(path.err().unwrap());
+        };
+        let Some(path) = path else {
+            return Err(anyhow!("Ref path has disappeared"));
+        };
+        let dir_entries = fs::read_dir(&path)
+            .context(format!("Trying to read path {}", &path.to_string_lossy()))?
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
+        let mut files = dir_entries
+            .iter()
+            .filter(|e| e.metadata().is_ok_and(|f| f.is_file()))
+            .map(|e| e.path())
+            .collect::<Vec<PathBuf>>();
+        files.sort();
+        let mut dirs = dir_entries
+            .iter()
+            .filter(|e| e.metadata().is_ok_and(|f| f.is_dir()))
+            .map(|e| e.path())
+            .collect::<Vec<PathBuf>>();
+        dirs.sort();
+        let mut output = IndexMap::<String, String>::new();
+        for f in files {
+            let mut stripped_path = self.strip_git_dir(&f);
+            let ref_target = self.resolve_ref(&stripped_path.to_string_lossy())?;
+            if let Some(rp) = root_path {
+                stripped_path = stripped_path.strip_prefix(rp)?.to_path_buf();
+            }
+            if let Some(ref_target) = ref_target {
+                output.insert(stripped_path.to_string_lossy().to_string(), ref_target);
+            }
+        }
+        for d in dirs {
+            let mut rec_result = self.ref_list_dir_internal(&self.strip_git_dir(&d), root_path)?;
+            output.append(&mut rec_result);
+        }
+        Ok(output)
+    }
+
+    pub fn create_ref(&self, name: &str, target_name: &str) -> Result<(), anyhow::Error> {
+        println!("Creating {name} pointing to {target_name}");
+        let ref_file_path = self.file(&PathBuf::from_iter(["refs", name]), true)?;
+        let Some(ref_file_path) = ref_file_path else {
+            return Err(anyhow!("Failure to create ref path"));
+        };
+        println!("{}", ref_file_path.display());
+        let mut ref_file = File::create(&ref_file_path)?;
+        ref_file.write_all(target_name.as_bytes())?;
+        ref_file.write_all("\n".as_bytes())?;
+        Ok(())
+    }
+
+    pub fn read_index(&self) -> Result<Index, anyhow::Error> {
+        let file = self.file(Path::new("index"), false)?;
+        let file = match file {
+            Some(f) => f,
+            None => {
+                return Ok(Index::new());
+            }
+        };
+        let data = std::fs::read(file).context("error loading index file")?;
+        let index = Index::from_bytes(&data).context("malformed index file")?;
+        Ok(index)
+    }
+
+    pub fn write_index(&self, index: &Index) -> Result<(), anyhow::Error> {
+        let tmp_file = self.path(Path::new("index.lck"));
+        let final_file = self.path(Path::new("index"));
+        let mut data = Vec::<u8>::new();
+        index.serialise(&mut data);
+        fs::write(&tmp_file, &data).context("error writing temporary index")?;
+        fs::rename(&tmp_file, &final_file).context("failed to rename temporary index file")?;
+        Ok(())
+    }
+
+    pub fn read_ignore_info(&self) -> Result<IgnoreInfo, anyhow::Error> {
+        let mut repo_wide_file: PathBuf = self.git_dir.join("info");
+        repo_wide_file.push("exclude");
+        let repo_file = if repo_wide_file.exists() {
+            Some(repo_wide_file)
+        } else {
+            None
+        };
+
+        let config_dir_var = env::var("XDG_CONFIG_HOME");
+        let config_dir = match config_dir_var {
+            Ok(var) => Some(PathBuf::from_str(&var).unwrap().join("git")),
+            Err(_) => env::home_dir().map(|hd| hd.join(".config").join("git")),
+        };
+        let global_file = if let Some(config_dir) = config_dir {
+            let global_exclude_file = config_dir.join("ignore");
+            if global_exclude_file.exists() {
+                Some(global_exclude_file)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut scoped_files = HashMap::<String, Blob>::new();
+        let index = self.read_index()?;
+        for entry in index
+            .entries()
+            .iter()
+            .filter(|e| e.object_name == ".gitignore" || e.object_name.ends_with("/.gitignore"))
+        {
+            let slash_idx = entry.object_name.rfind("/");
+            let entry_dir = match slash_idx {
+                Some(idx) => entry.object_name[..idx].to_string(),
+                None => String::new(),
+            };
+            let contents = self.read_object(&entry.object_id)?;
+            let Some(contents) = contents else {
+                return Err(anyhow!(
+                    "ignore file {} ({}) listed in index is not present in object store",
+                    entry.object_name,
+                    entry.object_id
+                ));
+            };
+            let StoredObject::Blob(blob) = contents else {
+                return Err(anyhow!(
+                    "ignore file {} ({}) listed in index is not a blob",
+                    entry.object_name,
+                    entry.object_id
+                ));
+            };
+            scoped_files.insert(entry_dir, blob);
+        }
+
+        IgnoreInfo::from_files(global_file, repo_file, scoped_files)
+    }
+
+    pub fn current_branch(&self) -> Result<Option<String>, anyhow::Error> {
+        let head = self
+            .file(Path::new("HEAD"), false)
+            .context("error finding HEAD")?;
+        let Some(head) = head else {
+            return Err(anyhow!("missing HEAD"));
+        };
+        let head_conts = std::fs::read_to_string(head).context("failed to read HEAD")?;
+        if let Some(head_target) = head_conts.strip_prefix("ref: refs/heads/") {
+            Ok(Some(head_target.trim().to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn is_branch_name<P: AsRef<Path>>(&self, query_name: P) -> Result<bool, anyhow::Error> {
+        let ref_path = self.branch_path(query_name);
+        Ok(ref_path.try_exists()? && ref_path.is_file())
+    }
+
+    pub fn update_branch<P: AsRef<Path>>(&self, branch_name: P, commit_id: &str) -> Result<(), anyhow::Error> {
+        let ref_path = self.branch_path(branch_name);
+        write_single_line(ref_path, commit_id)
+    }
+
+    fn branch_path<P: AsRef<Path>>(&self, branch_name: P) -> PathBuf {
+        self.git_dir.join("refs").join("heads").join(branch_name)
+    }
+
+    pub fn update_head(&self, branch_name: &str) -> Result<(), anyhow::Error> {
+        self.update_head_detached(&format!("ref: refs/heads/{branch_name}"))
+    }
+
+    pub fn update_head_detached(&self, commit_id: &str) -> Result<(), anyhow::Error> {
+        write_single_line(self.git_dir.join("HEAD"), commit_id)
+    }
+
+    pub fn flatten_head_tree(&self) -> Result<HashMap<String, String>, anyhow::Error> {
+        self.flatten_tree_recursive("HEAD", "")
+    }
+
+    fn flatten_tree_recursive(
+        &self,
+        tree_id: &str,
+        prefix: &str,
+    ) -> Result<HashMap<String, String>, anyhow::Error> {
+        let mut map = HashMap::<String, String>::new();
+        let tree_id = self
+            .find_object(tree_id, Some(ObjectKind::Tree), true)
+            .context("could not find tree")?;
+        let tree = self.read_object(&tree_id).context("error reading tree")?;
+        let Some(tree) = tree else {
+            return Err(anyhow!("tree has suddenly disappeared"));
+        };
+        let StoredObject::Tree(tree) = tree else {
+            return Err(anyhow!("tree is not actually a tree"));
+        };
+        for entry in tree.entries() {
+            let entry_path = entry.path.to_string_lossy();
+            let full_path = match prefix {
+                "" => entry_path.to_string(),
+                _ => format!("{prefix}/{entry_path}"),
+            };
+            if entry.mode < 0o100000 {
+                // Directory
+                let subresult = self.flatten_tree_recursive(&entry.object_id, &full_path)?;
+                map.extend(subresult.into_iter());
+            } else {
+                map.insert(full_path, entry.object_id.clone());
+            }
+        }
+        Ok(map)
+    }
+
+    pub fn remove_path_from_index(
+        &self,
+        path: &str,
+        index: &mut Index,
+        hard_delete: bool,
+    ) -> Result<bool, anyhow::Error> {
+        let worktree_path = self.worktree_path(path)?;
+        let index_path = path_translate(&worktree_path);
+        if !index.contains_path(&index_path) {
+            return Ok(false);
+        }
+        index.remove(&index_path);
+        if hard_delete {
+            let abs_path = self.canon_path(path).context("invalid path to remove")?;
+            fs::remove_file(&abs_path)
+                .context(format!("could not delete file {}", abs_path.display()))?;
+        }
+        Ok(true)
+    }
+
+    pub fn add_paths_to_index_and_write<T: AsRef<Path>>(
+        &self,
+        paths: &[T],
+    ) -> Result<(), anyhow::Error> {
+        let mut index = self.read_index()?;
+        for path in paths {
+            let new_entry = self.add_path_partial(path, &mut index)?;
+            if let Some(new_entry) = new_entry {
+                index.add_unsorted(new_entry);
+            }
+        }
+        index.sort();
+        self.write_index(&index)?;
+        Ok(())
+    }
+
+    /// Adds a path to the repository.  Removes any existing entry from the index, and returns a new index entry.  
+    fn add_path_partial<T: AsRef<Path>>(
+        &self,
+        path: T,
+        index: &mut Index,
+    ) -> Result<Option<IndexEntry>, anyhow::Error> {
+        let absolute_path = fs::canonicalize(path).context("could not make path valid")?;
+        if !absolute_path.starts_with(&self.worktree) {
+            return Err(anyhow!("path is outside the worktree"));
+        }
+        // Trying to add something inside the repo to the repo appears to be an error-free no-op in git
+        if absolute_path.starts_with(&self.git_dir) {
+            return Ok(None);
+        }
+        let relative_path = absolute_path.strip_prefix(&self.worktree)?;
+        let index_path = path_translate(relative_path);
+        let hash = self.write_object(&Blob::new_from_path(&absolute_path)?)?;
+        index.remove(&index_path);
+        Ok(Some(IndexEntry::from_file(
+            &absolute_path,
+            hash,
+            index_path,
+        )?))
+    }
+
+    pub fn check_index(&self, index: &Index) -> Result<Option<String>, anyhow::Error> {
+        for entry in index.entries() {
+            if self.resolve_object(&entry.object_id)?.len() != 1 {
+                return Ok(Some(entry.object_id.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn store_index(&self, index: &Index) -> Result<String, anyhow::Error> {
+        let mut dir_contents = HashMap::<String, Vec<&IndexEntry>>::new();
+        for entry in index.entries() {
+            let entry_dir_name = entry.object_directory_name();
+            add_to_map_of_vecs(&mut dir_contents, entry_dir_name, entry);
+            add_parent_dirs_to_map_of_vecs(&mut dir_contents, index_path_parent(entry_dir_name));
+        }
+        let mut dirs = dir_contents.keys().collect::<Vec<&String>>();
+        // reverse sort by length
+        dirs.sort_by_key(|a| std::cmp::Reverse(a.len()));
+        let mut trees = HashMap::<String, Vec<TreeNode>>::new();
+        let mut final_tree = String::new();
+        for dir in dirs {
+            let dir_name = index_path_file(dir);
+            let parent_dir = index_path_parent(dir);
+            let subdirs = if trees.contains_key(dir) {
+                &trees[dir]
+            } else {
+                &Vec::new()
+            };
+            let dir_id = self.store_partial_index(&dir_contents[dir], subdirs)?;
+            if dir.is_empty() {
+                final_tree = dir_id;
+            } else {
+                let dir_node = TreeNode::from_subtree(dir_name, &dir_id);
+                add_to_map_of_vecs(&mut trees, parent_dir, dir_node);
+            }
+        }
+        Ok(final_tree)
+    }
+
+    fn store_partial_index(
+        &self,
+        entries: &[&IndexEntry],
+        subtrees: &[TreeNode],
+    ) -> Result<String, anyhow::Error> {
+        let mut tree = Tree::new();
+        let mut nodes = entries
+            .iter()
+            .map(|ixe| TreeNode::from_index_entry(ixe))
+            .collect::<Vec<TreeNode>>();
+        nodes.append(&mut subtrees.to_vec());
+        tree.add_entries(&mut nodes);
+        self.write_object(&tree)
+    }
+}
+
+pub fn is_partial_object_id(id: &str) -> bool {
+    // IDs are 20 bytes, represented as 40 hex chars; we don't try to identify an ID that's less than 4 chars
+    id.len() >= 4 && id.len() <= 40 && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+// Object file names have had the first two characters removed.
+// Because of that, they look like valid object IDs that are 38 chars long,
+// even though they're not, on their own, valid object IDs
+fn is_object_file_name(name: &str) -> bool {
+    is_partial_object_id(name) && name.len() == 38
+}
