@@ -1,8 +1,9 @@
+use anyhow::anyhow;
 use std::collections::HashMap;
 
 use chrono::{DateTime, TimeZone};
 
-use crate::shared::helpers::fs::index_path_parent;
+use crate::shared::{helpers::fs::index_path_parent, repo::Repository};
 
 pub mod fs;
 
@@ -46,5 +47,13 @@ pub fn add_parent_dirs_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, path
             break;
         }
         shrunk_path = index_path_parent(shrunk_path);
+    }
+}
+
+pub fn find_repo_cwd() -> Result<Repository, anyhow::Error> {
+    let repo = Repository::find_cwd()?;
+    match repo {
+        Some(r) => Ok(r),
+        None => Err(anyhow!("Not in a repository"))
     }
 }

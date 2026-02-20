@@ -2,27 +2,20 @@ use std::path::PathBuf;
 
 use indexmap::IndexMap;
 
-use crate::shared::{objects::Tag, repo::Repository};
+use crate::shared::{helpers::find_repo_cwd, objects::Tag, repo::Repository};
 
 pub fn show_refs() -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    match repo {
-        Some(repo) => show_refs_in_repo(&repo),
-        None => Ok(()),
-    }
+    let repo = find_repo_cwd()?;
+    show_refs_in_repo(&repo)
 }
 
 pub fn show_tags() -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    match repo {
-        Some(repo) => show_tags_in_repo(&repo),
-        None => Ok(()),
-    }
+    let repo = find_repo_cwd()?;
+    show_tags_in_repo(&repo)
 }
 
 pub fn create_tag(name: &str, target: &str, chunky: bool) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     let absolute_target = repo.find_object(target, None, true)?;
     if chunky {
         create_chunky_tag(&repo, name, target)

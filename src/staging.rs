@@ -4,14 +4,13 @@ use std::{fs, path::Path, time::SystemTime};
 
 use crate::shared::{
     config::GlobalConfig,
-    helpers::fs::{path_translate, path_translate_rev, walk_fs_pruned},
+    helpers::{find_repo_cwd, fs::{path_translate, path_translate_rev, walk_fs_pruned}},
     objects::{Blob, Commit, RawObject},
     repo::Repository,
 };
 
 pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     let index = repo.read_index()?;
     if verbose {
         println!(
@@ -39,8 +38,7 @@ pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
 }
 
 pub fn check_ignore(paths: &[String]) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     let ignore_rules = repo.read_ignore_info()?;
     for path in paths {
         if ignore_rules.check(Path::new(path)) {
@@ -55,8 +53,7 @@ pub fn remove_files(
     index_only: bool,
     ignore_no_matches: bool,
 ) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     let mut some_removed = false;
     let mut index = repo.read_index()?;
     for path in paths {
@@ -74,15 +71,13 @@ pub fn remove_files(
 }
 
 pub fn add_files(paths: &[String]) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     repo.add_paths_to_index_and_write(paths)?;
     Ok(())
 }
 
 pub fn status() -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     status_branch(&repo)?;
     let staged_changes = status_index(&repo)?;
     let unstaged_changes = status_worktree(&repo)?;
@@ -95,6 +90,58 @@ pub fn status() -> Result<(), anyhow::Error> {
     }
     println!();
     Ok(())
+}
+
+pub fn store_index_as_tree(no_checks: bool) -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    println!("{}", store_index_as_tree_repo(&repo, no_checks)?);
+    Ok(())
+}
+
+pub fn create_commit_for_tree(
+    tree_id: &str,
+    parents: &[String],
+    message: &str,
+    config: &GlobalConfig,
+) -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    let parent_id = if !parents.is_empty() {
+        Some(parents[0].as_str())
+    } else {
+        None
+    };
+    let commit = Commit::new(
+        tree_id,
+        parent_id,
+        &config.author(),
+        &config.committer(),
+        &DateTime::<Utc>::from(SystemTime::now()),
+        message,
+    );
+    let commit_id = repo.write_object(&commit)?;
+    println!("{commit_id}");
+    Ok(())
+}
+
+pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    let tree_id = store_index_as_tree_repo(&repo, false)?;
+    let parent_id = repo.resolve_ref("HEAD")?;
+    let commit_id = create_commit_for_repo_tree(
+        &repo,
+        &tree_id,
+        parent_id.as_deref(),
+        message
+            .as_deref()
+            .unwrap_or("User forgot to enter commit message"),
+        config,
+    )?;
+    let current_branch = repo.current_branch()?;
+    if let Some(branch) = current_branch {
+        repo.update_branch(&branch, &commit_id)
+    } else {
+        repo.update_head_detached(&commit_id)
+    }
 }
 
 fn status_branch(repo: &Repository) -> Result<(), anyhow::Error> {
@@ -210,13 +257,6 @@ fn status_worktree(repo: &Repository) -> Result<bool, anyhow::Error> {
     Ok(printable)
 }
 
-pub fn store_index_as_tree(no_checks: bool) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
-    println!("{}", store_index_as_tree_repo(&repo, no_checks)?);
-    Ok(())
-}
-
 fn store_index_as_tree_repo(repo: &Repository, no_checks: bool) -> Result<String, anyhow::Error> {
     let index = repo.read_index()?;
     if !no_checks {
@@ -225,32 +265,6 @@ fn store_index_as_tree_repo(repo: &Repository, no_checks: bool) -> Result<String
         }
     }
     repo.store_index(&index)
-}
-
-pub fn create_commit_for_tree(
-    tree_id: &str,
-    parents: &[String],
-    message: &str,
-    config: &GlobalConfig,
-) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
-    let parent_id = if !parents.is_empty() {
-        Some(parents[0].as_str())
-    } else {
-        None
-    };
-    let commit = Commit::new(
-        tree_id,
-        parent_id,
-        &config.author(),
-        &config.committer(),
-        &DateTime::<Utc>::from(SystemTime::now()),
-        message,
-    );
-    let commit_id = repo.write_object(&commit)?;
-    println!("{commit_id}");
-    Ok(())
 }
 
 fn create_commit_for_repo_tree(
@@ -272,24 +286,4 @@ fn create_commit_for_repo_tree(
     Ok(commit_id)
 }
 
-pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
-    let tree_id = store_index_as_tree_repo(&repo, false)?;
-    let parent_id = repo.resolve_ref("HEAD")?;
-    let commit_id = create_commit_for_repo_tree(
-        &repo,
-        &tree_id,
-        parent_id.as_deref(),
-        message
-            .as_deref()
-            .unwrap_or("User forgot to enter commit message"),
-        config,
-    )?;
-    let current_branch = repo.current_branch()?;
-    if let Some(branch) = current_branch {
-        repo.update_branch(&branch, &commit_id)
-    } else {
-        repo.update_head_detached(&commit_id)
-    }
-}
+

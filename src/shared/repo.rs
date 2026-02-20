@@ -580,6 +580,27 @@ impl Repository {
         }
     }
 
+    pub fn branches(&self) -> Result<Vec<String>, anyhow::Error> {
+        let mut branches = Vec::<String>::new();
+        let Some(branches_dir) = self.dir(&PathBuf::from_iter(["refs", "heads"]), true)? else {
+            return Err(anyhow!(".git/refs/heads does not exist, was not created, but no error occured to explain why"));
+        };
+        for branch_entry in fs::read_dir(branches_dir)? {
+            let branch_entry = branch_entry?;
+            let file_type = branch_entry.file_type()?;
+            if file_type.is_file() {
+                branches.push(branch_entry.file_name().to_string_lossy().to_string());
+            }
+        }
+        if let Some(cb) = self.current_branch()? {
+            if !branches.contains(&cb) {
+                branches.push(cb);
+            }
+        }
+        branches.sort();
+        Ok(branches)
+    }
+
     pub fn is_branch_name<P: AsRef<Path>>(&self, query_name: P) -> Result<bool, anyhow::Error> {
         let ref_path = self.branch_path(query_name);
         Ok(ref_path.try_exists()? && ref_path.is_file())

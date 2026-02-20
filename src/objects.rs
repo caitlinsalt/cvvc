@@ -5,23 +5,23 @@ use std::{
 };
 
 use crate::shared::{
-    objects::{Blob, ObjectKind, RawObject, StoredObject},
-    repo::Repository,
+    helpers::find_repo_cwd, objects::{Blob, ObjectKind, RawObject, StoredObject}, repo::Repository
 };
 
 pub fn rev_parse(obj_name: &str) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else { return Ok(()) };
+    let repo = find_repo_cwd()?;
     println!("{}", &repo.find_object(obj_name, None, true)?);
     Ok(())
 }
 
 pub fn cat_file(obj_type: &str, obj_name: &str) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    match repo {
-        Some(repo) => cat_file_from_repo(repo, obj_type, obj_name),
-        None => Ok(()),
-    }
+    let repo = find_repo_cwd()?;
+    cat_file_from_repo(repo, obj_type, obj_name)
+}
+
+pub fn list_tree(recursive: bool, obj_name: &str) -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    list_tree_recursive(recursive, &repo, obj_name, None)
 }
 
 fn cat_file_from_repo(
@@ -57,14 +57,6 @@ pub fn object_hash(write: bool, filename: &str) -> Result<(), anyhow::Error> {
         }
     }
     Ok(())
-}
-
-pub fn list_tree(recursive: bool, obj_name: &str) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    let Some(repo) = repo else {
-        return Err(anyhow!("Not a repository"));
-    };
-    list_tree_recursive(recursive, &repo, obj_name, None)
 }
 
 fn list_tree_recursive(

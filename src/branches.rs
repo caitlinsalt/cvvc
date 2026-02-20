@@ -1,13 +1,50 @@
-use crate::shared::{objects::StoredObject, repo::Repository};
+use crate::shared::{helpers::find_repo_cwd, objects::StoredObject, repo::Repository};
 use anyhow::anyhow;
 use std::{fs, path::Path};
 
-pub fn checkout(obj_name: &str, dest: &str) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd()?;
-    match repo {
-        Some(repo) => checkout_from_repo(&repo, obj_name, dest),
-        None => Ok(()),
+pub fn checkout(target_name: &str, dest: &str) -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    checkout_from_repo(&repo, target_name, dest)
+}
+
+pub fn new_branch(branch_name: &str, checkout: bool) -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    new_branch_in_repo(&repo, branch_name, checkout)
+}
+
+pub fn list_branches() -> Result<(), anyhow::Error> {
+    let repo = find_repo_cwd()?;
+    list_branches_in_repo(&repo)
+}
+
+fn list_branches_in_repo(repo: &Repository) -> Result<(), anyhow::Error> {
+    let branches = repo.branches()?;
+    let cb = repo.current_branch()?.unwrap_or_else(String::new);
+    for branch in branches {
+        let cb_flag = if cb == branch {
+            "*"
+        } else {
+            " "
+        };
+        println!("{cb_flag} {branch}");
     }
+    Ok(())
+}
+
+fn new_branch_in_repo(repo: &Repository, branch_name: &str, checkout: bool) -> Result<(), anyhow::Error> {
+    if repo.is_branch_name(branch_name)? {
+        return Err(anyhow!("Branch {branch_name} exists"));
+    }
+    let current_commit = repo.resolve_ref("HEAD")?;
+    if let Some(current_commit) = current_commit {
+        repo.update_branch(branch_name, &current_commit)?;
+    }
+    if checkout {
+        repo.update_head(branch_name)
+    } else {
+        Ok(())
+    }
+
 }
 
 fn checkout_from_repo(repo: &Repository, target_name: &str, dest: &str) -> Result<(), anyhow::Error> {

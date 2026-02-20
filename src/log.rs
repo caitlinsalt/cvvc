@@ -1,15 +1,11 @@
 use crate::shared::{
-    objects::{ObjectKind, StoredObject},
-    repo::Repository,
+    helpers::find_repo_cwd, objects::{ObjectKind, StoredObject}, repo::Repository
 };
 use std::collections::HashSet;
 
 pub fn cmd(commit: &str) -> Result<(), anyhow::Error> {
-    let repo = Repository::find_cwd();
-    if let Ok(Some(the_repo)) = repo {
-        log_from_repo(the_repo, commit)?;
-    }
-    Ok(())
+    let repo = find_repo_cwd()?;
+    log_from_repo(repo, commit)
 }
 
 pub fn log_from_repo(repo: Repository, commit: &str) -> Result<(), anyhow::Error> {

@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::shared::config::GlobalConfig;
 
-mod checkout;
+mod branches;
 mod init;
 mod log;
 mod objects;
@@ -25,6 +25,14 @@ enum Commands {
         #[arg(value_name = "PATH")]
         paths: Vec<String>,
     },
+    /// List, create or delete branches
+    #[command()]
+    Branch {
+        #[arg(long)]
+        list: bool,
+        #[arg()]
+        branch: Option<String>,
+    },
     /// Output the content of a repository object
     #[command(name = "cat-file", arg_required_else_help = true)]
     CatFile {
@@ -44,9 +52,12 @@ enum Commands {
     /// Checkout a commit
     #[command(arg_required_else_help = true)]
     Checkout {
+        /// Create a new branch
+        #[arg(short = 'b')]
+        new_branch: bool,
         /// The commit or tree to check out
         #[arg(value_name = "COMMIT-OR-TREE")]
-        obj: String,
+        target: String,
         /// The directory to check out into
         #[arg(value_name = "DIR", default_value = ".")]
         path: String,
@@ -161,9 +172,24 @@ pub fn parse_dispatch() {
     let config = GlobalConfig::from_default_files();
     match args.command {
         Commands::Add { paths } => staging::add_files(&paths),
+        Commands::Branch { list, branch } => {
+            if list {
+                branches::list_branches()
+            } else if let Some(branch) = branch {
+                branches::new_branch(&branch, false)
+            } else {
+                branches::list_branches()
+            }
+        },
         Commands::CatFile { obj_type, obj_path } => objects::cat_file(&obj_type, &obj_path),
         Commands::CheckIgnore { paths } => staging::check_ignore(&paths),
-        Commands::Checkout { obj, path } => checkout::checkout(&obj, &path),
+        Commands::Checkout { new_branch, target, path } => {
+            if new_branch {
+                branches::new_branch(&target, true)
+            } else {
+                branches::checkout(&target, &path)
+            }
+        },
         Commands::Commit { message } => staging::full_commit(&config, message),
         Commands::CommitTree {
             tree_id,
