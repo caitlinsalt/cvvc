@@ -774,7 +774,6 @@ impl Repository {
         Tz: TimeZone,
         Tz::Offset: Display,
     {
-        println!("Writing reflog!");
         self.ref_log_store.write(
             &RefLogEntry::new(
                 old_object_id,

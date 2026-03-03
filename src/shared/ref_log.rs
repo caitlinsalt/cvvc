@@ -108,7 +108,6 @@ impl RefLog {
         entry: &RefLogEntry,
         branch_name: Option<&str>,
     ) -> Result<(), anyhow::Error> {
-        println!("Writing ref log entry {entry:?}");
         let file_path = self.ref_log_file_path(branch_name);
         self.write_to_file(entry, &file_path)?;
         if branch_name.is_some() {
