@@ -2,7 +2,7 @@ use anyhow::Context;
 use std::{
     fmt::Display,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -107,10 +107,7 @@ impl RefLog {
         entry: &RefLogEntry,
         branch_name: Option<&str>,
     ) -> Result<(), anyhow::Error> {
-        let file_path = match branch_name {
-            None => self.base_path.join("HEAD"),
-            Some(n) => self.base_path.join("refs").join("heads").join(n),
-        };
+        let file_path = self.ref_log_file_path(branch_name);
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -118,5 +115,44 @@ impl RefLog {
             .context("failed to open reflog file")?;
         writeln!(file, "{}", entry).context("failed to write to reflog file")?;
         Ok(())
+    }
+
+    pub fn dump(&self, branch_name: Option<&str>) -> Result<(), anyhow::Error> {
+        let file_path = self.ref_log_file_path(branch_name);
+        let mut file = OpenOptions::new().read(true).open(file_path).context("Failed to open ref-log file")?;
+        io::copy(&mut file, &mut io::stdout())?;
+        Ok(())
+    }
+
+    pub fn check_exists(&self, branch_name: &str) -> bool {
+        let file_path = if branch_name == "HEAD" {
+            self.ref_log_file_path(None)
+        } else {
+            self.ref_log_file_path(Some(branch_name))
+        };
+        file_path.exists()
+    }
+
+    pub fn list_ref_logs(&self) -> Result<Vec<String>, anyhow::Error> {
+        let mut output = Vec::<String>::new();
+        if self.base_path.join("HEAD").exists() {
+            output.push("HEAD".to_string());
+        }
+        let branch_ref_log_dir = self.base_path.join("refs").join("heads");
+        for ref_log_entry in fs::read_dir(branch_ref_log_dir)? {
+            let ref_log_entry = ref_log_entry?;
+            let file_type = ref_log_entry.file_type()?;
+            if file_type.is_file() {
+                output.push(format!("refs/heads/{}", ref_log_entry.file_name().to_string_lossy()));
+            }
+        }
+        Ok(output)
+    }
+
+    fn ref_log_file_path(&self, branch_name: Option<&str>) -> PathBuf {
+        match branch_name {
+            None => self.base_path.join("HEAD"),
+            Some(n) => self.base_path.join("refs").join("heads").join(n),
+        }
     }
 }

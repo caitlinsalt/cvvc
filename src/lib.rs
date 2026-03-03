@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use clap::{Args, Parser, Subcommand};
 
 use crate::shared::config::GlobalConfig;
@@ -6,6 +8,7 @@ mod branches;
 mod init;
 mod log;
 mod objects;
+mod ref_log;
 mod refs;
 mod shared;
 mod staging;
@@ -180,12 +183,20 @@ struct RefLogArgs {
 #[derive(Subcommand)]
 enum RefLogCommands {
     #[command()]
-    Exists,
+    Exists {
+        #[arg()]
+        branch: String,
+    },
     #[command()]
     List,
+    #[command()]
+    Show {
+        #[arg()]
+        branch: Option<String>,
+    },
 }
 
-pub fn parse_dispatch() {
+pub fn parse_dispatch() -> ExitCode {
     let args = Cli::parse();
     let config = GlobalConfig::from_default_files();
     match args.command {
@@ -227,7 +238,22 @@ pub fn parse_dispatch() {
         Commands::ListFiles { verbose } => staging::list_files(verbose),
         Commands::ListTree { recursive, tree } => objects::list_tree(recursive, &tree),
         Commands::Log { commit } => log::cmd(&commit),
-        Commands::RefLog(_) => Ok(()),
+        Commands::RefLog(sub_command) => {
+            match sub_command.command {
+                RefLogCommands::List => ref_log::list(),
+                RefLogCommands::Show { branch } => ref_log::show(branch.as_deref()),
+                RefLogCommands::Exists { branch } => {
+                    let exists = ref_log::exists(&branch);
+                    match exists {
+                        Ok(true) => Ok(()),
+                        Err(x) => Err(x),
+                        Ok(false) => {
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            }
+        }
         Commands::Remove {
             index_only,
             ignore_no_matches,
@@ -246,5 +272,6 @@ pub fn parse_dispatch() {
         },
         Commands::WriteTree { no_checks } => staging::store_index_as_tree(no_checks),
     }
-    .expect("Error!")
+    .expect("Error!");
+    ExitCode::SUCCESS
 }

@@ -1,6 +1,6 @@
 use crate::shared::{
     config::GlobalConfig,
-    helpers::{find_repo_cwd, shorten_message},
+    helpers::find_repo_cwd,
     objects::StoredObject,
     repo::Repository,
 };

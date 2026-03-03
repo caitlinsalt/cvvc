@@ -1,3 +1,5 @@
-fn main() {
-    ryag::parse_dispatch();
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    ryag::parse_dispatch()
 }

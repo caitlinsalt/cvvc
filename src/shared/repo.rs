@@ -784,6 +784,18 @@ impl Repository {
             branch_name,
         )
     }
+
+    pub fn show_ref_log(&self, branch_name: Option<&str>) -> Result<(), anyhow::Error> {
+        self.ref_log_store.dump(branch_name)
+    }
+
+    pub fn check_ref_log_exists(&self, branch_name: &str) -> Result<bool, anyhow::Error> {
+        Ok(self.ref_log_store.check_exists(branch_name))
+    }
+
+    pub fn list_ref_logs(&self) -> Result<Vec<String>, anyhow::Error> {
+        self.ref_log_store.list_ref_logs()
+    }
 }
 
 pub fn is_partial_object_id(id: &str) -> bool {
