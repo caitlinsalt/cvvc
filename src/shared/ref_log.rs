@@ -116,7 +116,11 @@ impl RefLog {
         Ok(())
     }
 
-    fn write_to_file<P: AsRef<Path>>(&self, entry: &RefLogEntry, path: P) -> Result<(), anyhow::Error> {
+    fn write_to_file<P: AsRef<Path>>(
+        &self,
+        entry: &RefLogEntry,
+        path: P,
+    ) -> Result<(), anyhow::Error> {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -128,7 +132,10 @@ impl RefLog {
 
     pub fn dump(&self, branch_name: Option<&str>) -> Result<(), anyhow::Error> {
         let file_path = self.ref_log_file_path(branch_name);
-        let mut file = OpenOptions::new().read(true).open(file_path).context("Failed to open ref-log file")?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(file_path)
+            .context("Failed to open ref-log file")?;
         io::copy(&mut file, &mut io::stdout())?;
         Ok(())
     }
@@ -152,7 +159,10 @@ impl RefLog {
             let ref_log_entry = ref_log_entry?;
             let file_type = ref_log_entry.file_type()?;
             if file_type.is_file() {
-                output.push(format!("refs/heads/{}", ref_log_entry.file_name().to_string_lossy()));
+                output.push(format!(
+                    "refs/heads/{}",
+                    ref_log_entry.file_name().to_string_lossy()
+                ));
             }
         }
         Ok(output)

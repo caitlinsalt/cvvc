@@ -1,8 +1,5 @@
 use crate::shared::{
-    config::GlobalConfig,
-    helpers::find_repo_cwd,
-    objects::StoredObject,
-    repo::Repository,
+    config::GlobalConfig, helpers::find_repo_cwd, objects::StoredObject, repo::Repository,
 };
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
@@ -112,7 +109,9 @@ fn checkout_from_repo(
         repo.update_head_detached(&target_id)?;
         println!("HEAD is detached at {target_id}");
     }
-    let ref_log_source = prev_branch.or_else(|| prev_commit_id.clone()).unwrap_or_else(|| "00000000000000000000".to_string());
+    let ref_log_source = prev_branch
+        .or_else(|| prev_commit_id.clone())
+        .unwrap_or_else(|| "00000000000000000000".to_string());
     let ref_log_message = format!("checkout: moving from {ref_log_source} to {target_id}");
     repo.write_ref_log(
         prev_commit_id.as_deref(),

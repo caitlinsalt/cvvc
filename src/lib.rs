@@ -238,22 +238,20 @@ pub fn parse_dispatch() -> ExitCode {
         Commands::ListFiles { verbose } => staging::list_files(verbose),
         Commands::ListTree { recursive, tree } => objects::list_tree(recursive, &tree),
         Commands::Log { commit } => log::cmd(&commit),
-        Commands::RefLog(sub_command) => {
-            match sub_command.command {
-                RefLogCommands::List => ref_log::list(),
-                RefLogCommands::Show { branch } => ref_log::show(branch.as_deref()),
-                RefLogCommands::Exists { branch } => {
-                    let exists = ref_log::exists(&branch);
-                    match exists {
-                        Ok(true) => Ok(()),
-                        Err(x) => Err(x),
-                        Ok(false) => {
-                            return ExitCode::FAILURE;
-                        }
+        Commands::RefLog(sub_command) => match sub_command.command {
+            RefLogCommands::List => ref_log::list(),
+            RefLogCommands::Show { branch } => ref_log::show(branch.as_deref()),
+            RefLogCommands::Exists { branch } => {
+                let exists = ref_log::exists(&branch);
+                match exists {
+                    Ok(true) => Ok(()),
+                    Err(x) => Err(x),
+                    Ok(false) => {
+                        return ExitCode::FAILURE;
                     }
                 }
             }
-        }
+        },
         Commands::Remove {
             index_only,
             ignore_no_matches,
