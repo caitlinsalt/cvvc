@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::shared::objects::{GitObject, RawObject};
 
 pub mod file_store;
+pub mod pack_store;
 
 pub trait ObjectStore {
     fn _new_with_config(config: &HashMap<String, String>) -> Result<Self, anyhow::Error>

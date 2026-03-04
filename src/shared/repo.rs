@@ -3,7 +3,7 @@ use chrono::{DateTime, TimeZone};
 use indexmap::IndexMap;
 use ini::Ini;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fmt::Display,
     fs::{self, File},
@@ -27,17 +27,18 @@ use crate::shared::{
     ignore::IgnoreInfo,
     index::{Index, IndexEntry},
     objects::{
-        stored_object_matches_kind, Blob, Commit, GitObject, ObjectKind, RawObject, StoredObject,
-        Tag, Tree, TreeNode,
+        Blob, Commit, GitObject, ObjectKind, RawObject, StoredObject, Tag, Tree, TreeNode, stored_object_matches_kind
     },
     ref_log::{RefLog, RefLogEntry},
-    stores::{file_store::LooseObjectStore, ObjectStore},
+    stores::{ObjectStore, file_store::LooseObjectStore, pack_store::PackStore},
 };
 
 pub struct Repository {
     pub worktree: PathBuf,
     pub git_dir: PathBuf,
     loose_object_store: LooseObjectStore,
+    packfile_base: PathBuf,
+    packs: Vec<PackStore>,
     ref_log_store: RefLog,
     config: Ini,
 }
@@ -112,11 +113,20 @@ impl Repository {
         let loose_object_store = LooseObjectStore::new(&loose_store_path)?;
         let ref_log_store = RefLog::new(git_dir.join("logs"));
 
+        let pack_dir = git_dir.join("objects").join("pack");
+        let packs = if pack_dir.is_dir() {
+            PackStore::find_packs(&pack_dir)?
+        } else {
+            vec![]
+        };
+
         Ok(Repository {
             worktree,
             git_dir,
             loose_object_store,
             ref_log_store,
+            packfile_base: pack_dir,
+            packs,
             config,
         })
     }
@@ -151,6 +161,7 @@ impl Repository {
 
         repo.dir(Path::new("branches"), true)?;
         repo.loose_object_store.create()?;
+        fs::create_dir_all(&repo.packfile_base)?;
         repo.ref_log_store.create()?;
         repo.dir(&["refs", "tags"].iter().collect::<PathBuf>(), true)?;
         repo.dir(&["refs", "heads"].iter().collect::<PathBuf>(), true)?;
@@ -291,8 +302,16 @@ impl Repository {
 
         let mut collected = Vec::<String>::new();
         if is_partial_object_id(name) {
-            let mut loose_objects = self.loose_object_store.search_objects(&name)?;
-            collected.append(&mut loose_objects);
+            let mut all_objects = HashSet::<String>::new();
+            for loose_object in self.loose_object_store.search_objects(&name)? {
+                all_objects.insert(loose_object);
+            }
+            for pack in &self.packs {
+                for packed_object in pack.search_objects(&name)? {
+                    all_objects.insert(packed_object);
+                }
+            }
+            collected.append(&mut all_objects.into_iter().collect());
         }
 
         let potential_tag = self.resolve_ref(&("refs/tags/".to_string() + name))?;
