@@ -97,7 +97,8 @@ impl ObjectStore for LooseObjectStore {
         let mut decompressor = ZlibDecoder::new(file);
         let mut data: Vec<u8> = vec![];
         decompressor.read_to_end(&mut data)?;
-        Ok(Some(RawObject::new(data, object_id)))
+        println!("{data:?}");
+        Ok(Some(RawObject::new(data, object_id, None)))
     }
 
     fn write_raw_object(

@@ -11,19 +11,21 @@ use std::{
 };
 
 use crate::shared::{
-    errors::InvalidObjectError, helpers::timestamped_name, index::IndexEntry, repo::Repository,
+    errors::InvalidObjectError, helpers::timestamped_name, index::IndexEntry, repo::Repository, stores::pack_store::{PackStore, PackedObjectMetadata},
 };
 
 pub struct RawObject {
     data: Vec<u8>,
     hash: String,
+    pub pack_metadata: Option<PackedObjectMetadata>,
 }
 
 impl RawObject {
-    pub fn new(data: Vec<u8>, hash: &str) -> Self {
+    pub fn new(data: Vec<u8>, hash: &str, metadata: Option<PackedObjectMetadata>) -> Self {
         RawObject {
             data,
             hash: hash.to_string(),
+            pack_metadata: metadata,
         }
     }
 
@@ -42,6 +44,7 @@ impl RawObject {
         Self {
             data: content,
             hash,
+            pack_metadata: None,
         }
     }
 
