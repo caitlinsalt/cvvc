@@ -14,7 +14,7 @@ pub fn log_from_repo(repo: Repository, commit: &str) -> Result<(), anyhow::Error
     let mut seen = HashSet::<String>::new();
     let starting_node = repo.find_object(commit, Some(ObjectKind::Commit), true)?;
 
-    println!("digraph ryaglog{{");
+    println!("digraph cvlog{{");
     println!("  node[shape=rect]");
     log_object_graphviz(&repo, &starting_node, &mut seen)?;
     println!("}}");

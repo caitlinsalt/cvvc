@@ -1,9 +1,12 @@
 [package]
-name = "ryag"
+name = "cvvc"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "cv"
 
 [dependencies]
 anyhow = "1.0.100"
@@ -20,3 +23,4 @@ whoami = "2.1.0"
 [target."cfg(windows)".dependencies]
 is_executable = "1.0.5"
 nt-time = { version = "0.13.0", features = ["chrono"] }
+

@@ -233,7 +233,7 @@ impl Tag {
     }
 
     pub fn create(target: &str, name: &str) -> Self {
-        let message = String::from("A tag created by Cait's RYAG");
+        let message = String::from("A tag created by Cait's Version of Version Control (CVVC)");
         let mut map = IndexMap::<String, Vec<String>>::new();
         map.insert(String::from("object"), vec![target.to_string()]);
         map.insert(String::from("type"), vec![String::from("commit")]);

@@ -87,7 +87,7 @@ pub fn status() -> Result<(), anyhow::Error> {
     let unstaged_changes = status_worktree(&repo)?;
     if unstaged_changes {
         if !staged_changes {
-            println!("no changes added to commit (use \"ryag add\")");
+            println!("no changes added to commit (use \"cv add\")");
         }
     } else if !staged_changes {
         println!("nothing to commit, working tree clean");
