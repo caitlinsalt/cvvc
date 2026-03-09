@@ -33,7 +33,7 @@ use crate::shared::{
     ref_log::{RefLog, RefLogEntry},
     stores::{
         file_store::LooseObjectStore,
-        pack_store::{PackStore, PackedObjectType},
+        pack_store::PackStore,
         ObjectStore,
     },
 };
@@ -358,89 +358,26 @@ impl Repository {
             return Ok(None);
         };
 
-        let data = match source {
+        let raw_object = match source {
             ObjectSource::LooseObjectStore => self.loose_object_store.read_object(sha)?,
             ObjectSource::Pack(i) => self.packs[i].read_object(sha)?,
         };
-        let Some(data) = data else {
+        let Some(raw_object) = raw_object else {
             return Ok(None);
         };
-        match source {
-            ObjectSource::LooseObjectStore => Self::parse_loose_object(data),
-            ObjectSource::Pack(_) => Self::parse_packed_object(data),
-        }
-    }
-
-    fn parse_packed_object(raw_object: RawObject) -> Result<Option<StoredObject>, anyhow::Error> {
-        let Some(ref metadata) = raw_object.pack_metadata else {
-            return Err(anyhow!("packed store did not set packed object metadata"));
-        };
-        match metadata.kind {
-            PackedObjectType::Blob => Ok(Some(StoredObject::Blob(Blob::deserialise(
-                raw_object.content(),
+        match raw_object.metadata().kind {
+            ObjectKind::Blob => Ok(Some(StoredObject::Blob(Blob::deserialise(
+                raw_object.content_headless(),
             )))),
-            PackedObjectType::Commit => Ok(Some(StoredObject::Commit(Commit::deserialise(
-                raw_object.content(),
+            ObjectKind::Commit => Ok(Some(StoredObject::Commit(Commit::deserialise(
+                raw_object.content_headless(),
             )))),
-            PackedObjectType::Tree => Ok(Some(StoredObject::Tree(Tree::deserialise(
-                raw_object.content(),
+            ObjectKind::Tree => Ok(Some(StoredObject::Tree(Tree::deserialise(
+                raw_object.content_headless(),
             )))),
-            PackedObjectType::Tag => Ok(Some(StoredObject::Tag(Tag::deserialise(
-                raw_object.content(),
+            ObjectKind::Tag => Ok(Some(StoredObject::Tag(Tag::deserialise(
+                raw_object.content_headless(),
             )))),
-            _ => Err(anyhow!(format!("Packed object type not supported"))),
-        }
-    }
-
-    fn parse_loose_object(raw_object: RawObject) -> Result<Option<StoredObject>, anyhow::Error> {
-        let data = raw_object.content();
-        let type_end_index = data.iter().position(|&x| x == 0x20).ok_or(anyhow!(
-            "Malformed object {}: end of object type code not found",
-            raw_object.hash()
-        ))?;
-        let len_start_index = type_end_index + 1;
-        let len_end_index = data
-            .iter()
-            .skip(len_start_index)
-            .position(|&x| x == 0)
-            .ok_or(anyhow!(
-                "Malformed object {}: end of object length not found",
-                raw_object.hash()
-            ))?
-            + len_start_index;
-        let data_start_index = len_end_index + 1;
-        let object_type = &data[..type_end_index];
-        let object_len = std::str::from_utf8(&data[len_start_index..len_end_index])?
-            .parse::<usize>()
-            .context(format!(
-                "Could not parse object length!  Object length string was {}",
-                std::str::from_utf8(&data[len_start_index..len_end_index])?
-            ))?;
-        let actual_len = data.len() - data_start_index;
-        if object_len != actual_len {
-            return Err(anyhow!(
-                "Malformed object {}: expected length {object_len}, actual length {actual_len}",
-                raw_object.hash()
-            ));
-        }
-
-        match object_type {
-            b"blob" => Ok(Some(StoredObject::Blob(Blob::deserialise(
-                &data[data_start_index..],
-            )))),
-            b"commit" => Ok(Some(StoredObject::Commit(Commit::deserialise(
-                &data[data_start_index..],
-            )))),
-            b"tree" => Ok(Some(StoredObject::Tree(Tree::deserialise(
-                &data[data_start_index..],
-            )))),
-            b"tag" => Ok(Some(StoredObject::Tag(Tag::deserialise(
-                &data[data_start_index..],
-            )))),
-            _ => Err(anyhow!(format!(
-                "Unrecognised object type {}",
-                std::str::from_utf8(object_type).unwrap_or("[mangled]")
-            ))),
         }
     }
 
@@ -524,12 +461,10 @@ impl Repository {
     }
 
     pub fn create_ref(&self, name: &str, target_name: &str) -> Result<(), anyhow::Error> {
-        println!("Creating {name} pointing to {target_name}");
         let ref_file_path = self.file(&PathBuf::from_iter(["refs", name]), true)?;
         let Some(ref_file_path) = ref_file_path else {
             return Err(anyhow!("Failure to create ref path"));
         };
-        println!("{}", ref_file_path.display());
         let mut ref_file = File::create(&ref_file_path)?;
         ref_file.write_all(target_name.as_bytes())?;
         ref_file.write_all("\n".as_bytes())?;

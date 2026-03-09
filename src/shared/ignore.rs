@@ -140,9 +140,7 @@ impl IgnoreInfo {
                 }
             }
         };
-        //println!("checking path {str_path} (parent path is {str_scope})");
         if self.scoped.contains_key(&str_scope) {
-            //println!("Checking at this level");
             let result = IgnorePattern::matches_set(&self.scoped[&str_scope], &str_path);
             if result.is_some() {
                 return result;

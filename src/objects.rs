@@ -52,7 +52,7 @@ fn cat_file_from_repo(
 
 pub fn object_hash(write: bool, filename: &str) -> Result<(), anyhow::Error> {
     let raw_object = RawObject::from_git_object(&Blob::new_from_path(filename)?);
-    println!("{}", raw_object.hash());
+    println!("{}", raw_object.object_id());
     if write {
         if let Some(repo) = Repository::find_cwd()? {
             repo.write_raw_object(&raw_object)?;

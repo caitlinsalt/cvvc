@@ -97,15 +97,14 @@ impl ObjectStore for LooseObjectStore {
         let mut decompressor = ZlibDecoder::new(file);
         let mut data: Vec<u8> = vec![];
         decompressor.read_to_end(&mut data)?;
-        println!("{data:?}");
-        Ok(Some(RawObject::new(data, object_id, None)))
+        Ok(Some(RawObject::from_data_with_header(&data, object_id)?))
     }
 
     fn write_raw_object(
         &self,
         obj: &crate::shared::objects::RawObject,
     ) -> Result<String, anyhow::Error> {
-        let path = self.object_file(&obj.hash());
+        let path = self.object_file(&obj.object_id());
 
         if !path.exists() {
             let obj_parent_dir = path.parent();
@@ -116,11 +115,11 @@ impl ObjectStore for LooseObjectStore {
             }
             let mut file = fs::File::create(path)?;
             let mut compressor = ZlibEncoder::new(
-                BufReader::new(Cursor::new(obj.content())),
+                BufReader::new(Cursor::new(obj.content_with_header())),
                 Compression::best(),
             );
             std::io::copy(&mut compressor, &mut file)?;
         }
-        Ok(obj.hash().to_string())
+        Ok(obj.object_id().to_string())
     }
 }

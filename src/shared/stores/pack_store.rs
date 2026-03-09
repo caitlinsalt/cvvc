@@ -5,11 +5,10 @@ use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{BufReader, Read, Seek, SeekFrom},
-    ops::Deref,
     path::{Path, PathBuf},
 };
 
-use crate::shared::{objects::RawObject, stores::ObjectStore};
+use crate::shared::{objects::{ObjectKind, ObjectMetadata, RawObject}, stores::ObjectStore};
 
 pub struct PackStore {
     base_path: PathBuf,
@@ -165,7 +164,6 @@ impl PackStore {
     {
         let mut results = Vec::<PackIndexObject>::new();
         let starting_range = Self::get_index_offset_range(index_file, partial_object_id)?;
-        println!("Starting range is {starting_range:?}");
         if starting_range.is_empty() {
             return Ok(results);
         }
@@ -229,7 +227,6 @@ impl PackStore {
         }
         if obj_range.size() == 1 {
             let obj_id = Self::get_index_object_id_at_pos(index_file, obj_range.start_idx)?;
-            println!("Range 1 compare: checking {obj_id}");
             if obj_id.starts_with(partial_object_id) {
                 return Ok(Some(PackIndexObject {
                     object_id: obj_id,
@@ -241,7 +238,6 @@ impl PackStore {
         }
         let mid = obj_range.mid();
         let obj_id = Self::get_index_object_id_at_pos(index_file, mid)?;
-        println!("Checking pos {mid} - {obj_id}");
         if obj_id.starts_with(partial_object_id) {
             return Ok(Some(PackIndexObject {
                 object_id: obj_id,
@@ -367,7 +363,6 @@ impl PackStore {
         R: Read,
         R: Seek,
     {
-        println!("Reading from {address}");
         pack_file.seek(SeekFrom::Start(address))?;
         let mut buf = if self.primary_file_len - address > 30 {
             // enough data to encode a 64-bit length followed by an object ID.
@@ -381,7 +376,6 @@ impl PackStore {
         };
 
         pack_file.read_exact(&mut buf)?;
-        println!("The monstrosity we have to decode? {buf:?}");
         let packed_object_type: PackedObjectTypeOnly = buf[0].try_into()?;
         let mut object_size: u64 = (buf[0] & 0xf).into();
         let mut bytes_read = 1;
@@ -414,8 +408,6 @@ impl PackStore {
             None
         };
         let data_start_address = address + (bytes_read as u64);
-        println!("Object size is {object_size}");
-        println!("Data starts at {data_start_address}");
         PackedObjectMetadata::try_from_type_only(
             packed_object_type,
             object_size,
@@ -476,17 +468,11 @@ impl ObjectStore for PackStore {
     }
 
     fn search_objects(&self, partial_object_id: &str) -> Result<Vec<String>, anyhow::Error> {
-        println!("Searching for {partial_object_id} in {}", self.pack_name);
         let mut reader = self.open_index_file()?;
         if !Self::check_index_version(&mut reader)? {
             return Err(anyhow!("pack index file format not recognised"));
         }
         let found_objects = self.search_index_objects(&mut reader, partial_object_id)?;
-        println!(
-            "{} objects found in {}",
-            found_objects.len(),
-            self.pack_name
-        );
         Ok(found_objects.into_iter().map(|x| x.object_id).collect())
     }
 
@@ -509,19 +495,21 @@ impl ObjectStore for PackStore {
             return Err(anyhow!("pack file format not recognised"));
         }
         let (meta, data) = self.read_at_address(&mut pack_file, object_address)?;
-        println!("{data:?}");
         if meta.is_base_object() {
-            Ok(Some(RawObject::new(data, object_id, Some(meta))))
+            let metadata = ObjectMetadata::new(ObjectKind::try_from(meta.kind)?, data.len());
+            Ok(Some(RawObject::from_headless_data(&data, object_id, metadata)))
         } else if let PackedObjectType::OffsetDelta(offset) = meta.kind {
             let (base_meta, base_data) =
                 self.read_at_address(&mut pack_file, object_address - offset)?;
-            Ok(Some(RawObject::new(
-                combine_data(&base_data, &data),
+            let combined_meta = meta.combine(&base_meta);
+            let unpacked_metadata = ObjectMetadata::new(ObjectKind::try_from(combined_meta.kind)?, combined_meta.size as usize);
+            Ok(Some(RawObject::from_headless_data(
+                &combine_data(&base_data, &data),
                 object_id,
-                Some(meta.combine(&base_meta)),
+                unpacked_metadata,
             )))
         } else {
-            Ok(None)
+            todo!();
         }
     }
 
@@ -563,6 +551,20 @@ pub enum PackedObjectType {
     Tag,
     OffsetDelta(u64),
     NamedDelta(String),
+}
+
+impl TryFrom<PackedObjectType> for ObjectKind {
+    type Error = anyhow::Error;
+
+    fn try_from(value: PackedObjectType) -> Result<Self, Self::Error> {
+        match value {
+            PackedObjectType::Blob => Ok(ObjectKind::Blob),
+            PackedObjectType::Commit => Ok(ObjectKind::Commit),
+            PackedObjectType::Tree => Ok(ObjectKind::Tree),
+            PackedObjectType::Tag => Ok(ObjectKind::Tag),
+            _ => Err(anyhow!("unpacked objects must be undeltafied"))
+        }
+    }
 }
 
 impl PackedObjectType {
@@ -653,13 +655,6 @@ impl PackedObjectMetadata {
 fn combine_data(base_data: &[u8], apply_commands: &[u8]) -> Vec<u8> {
     let mut result = Vec::<u8>::new();
     let mut idx = 0;
-    println!("Data combining time");
-    println!(
-        "Base data {}, commands {}",
-        base_data.len(),
-        apply_commands.len()
-    );
-    println!("Command data starts {:?}", &apply_commands[..20]);
 
     // The commands start with two sizes, the size of the base and the size of the output.
     // We could read these for verification, if I was a Good Girl, but that can be a job for later.
@@ -671,7 +666,7 @@ fn combine_data(base_data: &[u8], apply_commands: &[u8]) -> Vec<u8> {
         }
         idx += 1;
     }
-    println!("Commands start with {:?}", &apply_commands[idx..20]);
+
     while idx < apply_commands.len() {
         let command = DeltaCommand::from_bytes(&apply_commands[idx..]);
         match command.kind {
@@ -700,15 +695,12 @@ struct DeltaCommand {
 impl DeltaCommand {
     fn from_bytes(data: &[u8]) -> Self {
         if data[0] < 0x80 {
-            println!("Hmm, moving raw data");
             let size = data[0] & 0x7f;
             Self {
                 len: size as usize + 1,
                 kind: DeltaCommandType::Add(size as usize),
             }
         } else {
-            println!("Oooh, doing a base copy!");
-            //println!("{:?}", &data[..8]);
             let bits = data[0] & 0x7f;
             if bits == 0 {
                 Self {

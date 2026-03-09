@@ -15,49 +15,123 @@ use crate::shared::{
     helpers::timestamped_name,
     index::IndexEntry,
     repo::Repository,
-    stores::pack_store::{PackStore, PackedObjectMetadata},
 };
+
+pub struct ObjectMetadata {
+    pub kind: ObjectKind,
+    pub size: usize
+}
+
+impl ObjectMetadata {
+    pub fn new(kind: ObjectKind, size: usize) -> Self {
+        Self {
+            kind,
+            size,
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for ObjectMetadata {
+    type Error = anyhow::Error;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        let type_end_index = data.iter().position(|&x| x == 0x20).ok_or(anyhow!(
+            "malformed object: end of object type code not found"
+        ))?;
+        let len_start_index = type_end_index + 1;
+        let len_end_index = data
+            .iter()
+            .skip(len_start_index)
+            .position(|&x| x == 0)
+            .ok_or(anyhow!(
+                "malformed object: end of object length not found"
+            ))?
+            + len_start_index;
+        let data_start_index = len_end_index + 1;
+        let object_kind = ObjectKind::try_from(&data[..type_end_index])?;
+        let object_len = std::str::from_utf8(&data[len_start_index..len_end_index])?
+            .parse::<usize>()
+            .context(format!(
+                "Could not parse object length!  Object length string was {}",
+                std::str::from_utf8(&data[len_start_index..len_end_index])?
+            ))?;
+        let actual_len = data.len() - data_start_index;
+        if object_len != actual_len {
+            return Err(anyhow!(
+                "malformed object: expected length {object_len}, actual length {actual_len}"
+            ));
+        }
+        Ok(Self {
+            kind: object_kind,
+            size: actual_len,
+        })
+    }
+}
 
 pub struct RawObject {
     data: Vec<u8>,
-    hash: String,
-    pub pack_metadata: Option<PackedObjectMetadata>,
+    object_id: String,
+    metadata: ObjectMetadata,
 }
 
 impl RawObject {
-    pub fn new(data: Vec<u8>, hash: &str, metadata: Option<PackedObjectMetadata>) -> Self {
-        RawObject {
-            data,
-            hash: hash.to_string(),
-            pack_metadata: metadata,
+    pub fn from_data_with_header(data: &[u8], object_id: &str) -> Result<Self, anyhow::Error> {
+        let metadata = ObjectMetadata::try_from(data)?;
+        let data_start_offset = data.len() - metadata.size;
+        Ok(Self {
+            data: data[data_start_offset..].to_vec(),
+            object_id: object_id.to_string(),
+            metadata,
+        })
+    }
+
+    pub fn from_headless_data(data: &[u8], object_id: &str, metadata: ObjectMetadata) -> Self {
+        Self {
+            data: data.to_vec(),
+            object_id: object_id.to_string(),
+            metadata
         }
     }
 
     pub fn from_git_object(obj: &impl GitObject) -> Self {
         let mut data = Vec::<u8>::new();
         obj.serialise(&mut data);
+        let size = data.len();
         let mut content = obj.object_type_code().to_vec();
         content.extend(b" ");
-        content.extend(data.len().to_string().into_bytes());
+        content.extend(size.to_string().into_bytes());
         content.extend(b"\x00");
         content.extend(data);
 
         let mut hasher = Sha1::new();
         hasher.update(&content);
-        let hash = hex::encode(hasher.finalize());
+        let object_id = hex::encode(hasher.finalize());
         Self {
             data: content,
-            hash,
-            pack_metadata: None,
+            object_id,
+            metadata: ObjectMetadata { kind: obj.kind(), size },
         }
     }
 
-    pub fn content(&self) -> &[u8] {
+    pub fn content_headless(&self) -> &[u8] {
         &self.data
     }
 
-    pub fn hash(&self) -> &str {
-        &self.hash
+    pub fn content_with_header(&self) -> Vec<u8> {
+        let mut content = self.metadata.kind.bytes().to_vec();
+        content.extend(b" ");
+        content.extend(self.metadata.size.to_string().into_bytes());
+        content.extend(b"\x00");
+        content.extend(self.data.iter());
+        content
+    }
+
+    pub fn object_id(&self) -> &str {
+        &self.object_id
+    }
+
+    pub fn metadata(&self) -> &ObjectMetadata {
+        &self.metadata
     }
 }
 
@@ -66,6 +140,31 @@ pub enum ObjectKind {
     Commit,
     Tree,
     Tag,
+}
+
+impl ObjectKind {
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            ObjectKind::Blob => b"blob",
+            ObjectKind::Commit => b"commit",
+            ObjectKind::Tag => b"tag",
+            ObjectKind::Tree => b"tree",
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for ObjectKind {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value {
+            b"blob" => Ok(ObjectKind::Blob),
+            b"commit" => Ok(ObjectKind::Commit),
+            b"tree" => Ok(ObjectKind::Tree),
+            b"tag" => Ok(ObjectKind::Tag),
+            _ => Err(anyhow!("unrecognised object type"))
+        }
+    }
 }
 
 pub enum StoredObject {
@@ -88,7 +187,7 @@ impl StoredObject {
 
 pub trait GitObject {
     type Implementation;
-    fn _kind(&self) -> ObjectKind;
+    fn kind(&self) -> ObjectKind;
     fn object_type_code(&self) -> &'static [u8];
     fn serialise(&self, buf: &mut Vec<u8>);
     fn deserialise(data: &[u8]) -> Self::Implementation
@@ -122,7 +221,7 @@ impl Blob {
 impl GitObject for Blob {
     type Implementation = Blob;
 
-    fn _kind(&self) -> ObjectKind {
+    fn kind(&self) -> ObjectKind {
         ObjectKind::Blob
     }
 
@@ -200,7 +299,7 @@ impl Commit {
 impl GitObject for Commit {
     type Implementation = Commit;
 
-    fn _kind(&self) -> ObjectKind {
+    fn kind(&self) -> ObjectKind {
         ObjectKind::Commit
     }
 
@@ -261,7 +360,7 @@ impl Tag {
 impl GitObject for Tag {
     type Implementation = Tag;
 
-    fn _kind(&self) -> ObjectKind {
+    fn kind(&self) -> ObjectKind {
         ObjectKind::Tag
     }
 
@@ -454,7 +553,7 @@ impl Tree {
 impl GitObject for Tree {
     type Implementation = Tree;
 
-    fn _kind(&self) -> ObjectKind {
+    fn kind(&self) -> ObjectKind {
         ObjectKind::Tree
     }
 
