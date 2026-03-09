@@ -11,23 +11,17 @@ use std::{
 };
 
 use crate::shared::{
-    errors::InvalidObjectError,
-    helpers::timestamped_name,
-    index::IndexEntry,
-    repo::Repository,
+    errors::InvalidObjectError, helpers::timestamped_name, index::IndexEntry, repo::Repository,
 };
 
 pub struct ObjectMetadata {
     pub kind: ObjectKind,
-    pub size: usize
+    pub size: usize,
 }
 
 impl ObjectMetadata {
     pub fn new(kind: ObjectKind, size: usize) -> Self {
-        Self {
-            kind,
-            size,
-        }
+        Self { kind, size }
     }
 }
 
@@ -43,9 +37,7 @@ impl TryFrom<&[u8]> for ObjectMetadata {
             .iter()
             .skip(len_start_index)
             .position(|&x| x == 0)
-            .ok_or(anyhow!(
-                "malformed object: end of object length not found"
-            ))?
+            .ok_or(anyhow!("malformed object: end of object length not found"))?
             + len_start_index;
         let data_start_index = len_end_index + 1;
         let object_kind = ObjectKind::try_from(&data[..type_end_index])?;
@@ -76,7 +68,8 @@ pub struct RawObject {
 
 impl RawObject {
     pub fn from_data_with_header(data: &[u8], object_id: &str) -> Result<Self, anyhow::Error> {
-        let metadata = ObjectMetadata::try_from(data).with_context(|| format!("failed to load {}", object_id))?;
+        let metadata = ObjectMetadata::try_from(data)
+            .with_context(|| format!("failed to load {}", object_id))?;
         let data_start_offset = data.len() - metadata.size;
         Ok(Self {
             data: data[data_start_offset..].to_vec(),
@@ -89,7 +82,7 @@ impl RawObject {
         Self {
             data: data.to_vec(),
             object_id: object_id.to_string(),
-            metadata
+            metadata,
         }
     }
 
@@ -114,7 +107,10 @@ impl RawObject {
         Self {
             data,
             object_id,
-            metadata: ObjectMetadata { kind: obj.kind(), size },
+            metadata: ObjectMetadata {
+                kind: obj.kind(),
+                size,
+            },
         }
     }
 
@@ -164,7 +160,7 @@ impl TryFrom<&[u8]> for ObjectKind {
             b"commit" => Ok(ObjectKind::Commit),
             b"tree" => Ok(ObjectKind::Tree),
             b"tag" => Ok(ObjectKind::Tag),
-            _ => Err(anyhow!("unrecognised object type"))
+            _ => Err(anyhow!("unrecognised object type")),
         }
     }
 }

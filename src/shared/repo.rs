@@ -3,7 +3,13 @@ use chrono::{DateTime, TimeZone};
 use indexmap::IndexMap;
 use ini::Ini;
 use std::{
-    collections::{HashMap, HashSet}, env, fmt::Display, fs::{self, File}, io::Write, path::{Path, PathBuf}, str::FromStr
+    collections::{HashMap, HashSet},
+    env,
+    fmt::Display,
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use crate::shared::{
@@ -25,11 +31,7 @@ use crate::shared::{
         Tag, Tree, TreeNode,
     },
     ref_log::{RefLog, RefLogEntry},
-    stores::{
-        file_store::LooseObjectStore,
-        pack_store::PackStore,
-        ObjectStore,
-    },
+    stores::{file_store::LooseObjectStore, pack_store::PackStore, ObjectStore},
 };
 
 pub struct Repository {
@@ -302,11 +304,11 @@ impl Repository {
         let mut collected = Vec::<String>::new();
         if is_partial_object_id(name) {
             let mut all_objects = HashSet::<String>::new();
-            for loose_object in self.loose_object_store.search_objects(&name)? {
+            for loose_object in self.loose_object_store.search_objects(name)? {
                 all_objects.insert(loose_object);
             }
             for pack in &self.packs {
-                for packed_object in pack.search_objects(&name)? {
+                for packed_object in pack.search_objects(name)? {
                     all_objects.insert(packed_object);
                 }
             }
@@ -357,7 +359,7 @@ impl Repository {
             ObjectSource::Pack(i) => self.packs[i].read_object(object_id)?,
         };
 
-        Ok(raw_object)        
+        Ok(raw_object)
     }
 
     pub fn read_object(&self, object_id: &str) -> Result<Option<StoredObject>, anyhow::Error> {

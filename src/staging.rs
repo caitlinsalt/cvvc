@@ -155,7 +155,7 @@ pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(),
         &commit_id,
         &config.committer(),
         &timestamp,
-        &shorten_message("commit", &message),
+        &shorten_message("commit", message),
         current_branch.as_deref(),
     )
 }

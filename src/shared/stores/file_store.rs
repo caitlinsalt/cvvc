@@ -78,7 +78,7 @@ impl ObjectStore for LooseObjectStore {
 
     fn read_object(
         &self,
-        object_id: &str
+        object_id: &str,
     ) -> Result<Option<crate::shared::objects::RawObject>, anyhow::Error> {
         let path = self.object_file(object_id);
         if !path.is_file() {
@@ -95,7 +95,7 @@ impl ObjectStore for LooseObjectStore {
         &self,
         obj: &crate::shared::objects::RawObject,
     ) -> Result<String, anyhow::Error> {
-        let path = self.object_file(&obj.object_id());
+        let path = self.object_file(obj.object_id());
 
         if !path.exists() {
             let obj_parent_dir = path.parent();

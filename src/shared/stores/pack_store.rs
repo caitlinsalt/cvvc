@@ -8,7 +8,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::shared::{objects::{ObjectKind, ObjectMetadata, RawObject}, stores::ObjectStore};
+use crate::shared::{
+    objects::{ObjectKind, ObjectMetadata, RawObject},
+    stores::ObjectStore,
+};
 
 pub struct PackStore {
     _pack_name: String,
@@ -44,7 +47,7 @@ impl PackStore {
         })
     }
 
-    pub fn find_packs<'a, P: AsRef<Path>>(base_path: P) -> Result<Vec<Self>, anyhow::Error> {
+    pub fn find_packs<P: AsRef<Path>>(base_path: P) -> Result<Vec<Self>, anyhow::Error> {
         let base_path = base_path.as_ref();
         if !base_path.is_dir() {
             return Err(anyhow!("base path is not a directory"));
@@ -67,10 +70,10 @@ impl PackStore {
                 }
             }
         }
-        Ok(pack_names
+        pack_names
             .iter()
             .map(|x| Self::new(base_path, x))
-            .collect::<Result<Vec<Self>, anyhow::Error>>()?)
+            .collect::<Result<Vec<Self>, anyhow::Error>>()
     }
 
     fn check_index_version<R>(index_file: &mut BufReader<R>) -> Result<bool, anyhow::Error>
@@ -306,7 +309,7 @@ impl PackStore {
             return Err(anyhow!("pack index file format not recognised"));
         }
         let targets = self.search_index_objects(&mut index_file, object_id)?;
-        if targets.len() == 0 {
+        if targets.is_empty() {
             return Ok(None);
         }
         Ok(Some(self.get_object_address_from_index(
@@ -436,7 +439,9 @@ impl PackStore {
             let (base_meta, base_data) = self.read_at_address(reusable_file, address - offset)?;
             Ok((meta.combine(&base_meta), combine_data(&base_data, &data)))
         } else if let PackedObjectType::NamedDelta(oid) = meta.kind {
-            Err(anyhow!("cannot load named delta offset: relies on object {oid}"))
+            Err(anyhow!(
+                "cannot load named delta offset: relies on object {oid}"
+            ))
         } else {
             Err(anyhow!("unsupported packed object type"))
         }
@@ -444,7 +449,6 @@ impl PackStore {
 }
 
 impl ObjectStore for PackStore {
-
     fn create(&self) -> Result<(), anyhow::Error> {
         Err(anyhow!("pack creation not yet supported"))
     }
@@ -483,12 +487,17 @@ impl ObjectStore for PackStore {
         let (meta, data) = self.read_at_address(&mut pack_file, object_address)?;
         if meta.is_base_object() {
             let metadata = ObjectMetadata::new(ObjectKind::try_from(meta.kind)?, data.len());
-            Ok(Some(RawObject::from_headless_data(&data, object_id, metadata)))
+            Ok(Some(RawObject::from_headless_data(
+                &data, object_id, metadata,
+            )))
         } else if let PackedObjectType::OffsetDelta(offset) = meta.kind {
             let (base_meta, base_data) =
                 self.read_at_address(&mut pack_file, object_address - offset)?;
             let combined_meta = meta.combine(&base_meta);
-            let unpacked_metadata = ObjectMetadata::new(ObjectKind::try_from(combined_meta.kind)?, combined_meta.size as usize);
+            let unpacked_metadata = ObjectMetadata::new(
+                ObjectKind::try_from(combined_meta.kind)?,
+                combined_meta.size as usize,
+            );
             Ok(Some(RawObject::from_headless_data(
                 &combine_data(&base_data, &data),
                 object_id,
@@ -548,18 +557,17 @@ impl TryFrom<PackedObjectType> for ObjectKind {
             PackedObjectType::Commit => Ok(ObjectKind::Commit),
             PackedObjectType::Tree => Ok(ObjectKind::Tree),
             PackedObjectType::Tag => Ok(ObjectKind::Tag),
-            _ => Err(anyhow!("unpacked objects must be undeltafied"))
+            _ => Err(anyhow!("unpacked objects must be undeltafied")),
         }
     }
 }
 
 impl PackedObjectType {
     fn is_base_object(&self) -> bool {
-        match self {
-            PackedObjectType::OffsetDelta(_) => false,
-            PackedObjectType::NamedDelta(_) => false,
-            _ => true,
-        }
+        !matches!(
+            self,
+            PackedObjectType::OffsetDelta(_) | PackedObjectType::NamedDelta(_)
+        )
     }
 }
 
@@ -657,7 +665,7 @@ fn combine_data(base_data: &[u8], apply_commands: &[u8]) -> Vec<u8> {
         let command = DeltaCommand::from_bytes(&apply_commands[idx..]);
         match command.kind {
             DeltaCommandType::Add(sz) => {
-                result.extend_from_slice(&apply_commands[(idx + 1)..(idx + 1 + sz as usize)])
+                result.extend_from_slice(&apply_commands[(idx + 1)..(idx + 1 + sz)])
             }
             DeltaCommandType::Copy { offset, size } => {
                 result.extend_from_slice(&base_data[offset..(offset + size)])
