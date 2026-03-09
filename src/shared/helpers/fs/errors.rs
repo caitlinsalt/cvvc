@@ -1,5 +1,6 @@
 use std::{error::Error, fmt::Display};
 
+
 #[derive(Debug)]
 pub enum PathErrorKind {
     InvalidPath,

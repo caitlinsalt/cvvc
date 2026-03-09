@@ -76,7 +76,7 @@ pub struct RawObject {
 
 impl RawObject {
     pub fn from_data_with_header(data: &[u8], object_id: &str) -> Result<Self, anyhow::Error> {
-        let metadata = ObjectMetadata::try_from(data)?;
+        let metadata = ObjectMetadata::try_from(data).with_context(|| format!("failed to load {}", object_id))?;
         let data_start_offset = data.len() - metadata.size;
         Ok(Self {
             data: data[data_start_offset..].to_vec(),
@@ -93,21 +93,26 @@ impl RawObject {
         }
     }
 
+    fn construct_header(kind: &ObjectKind, size: usize) -> Vec<u8> {
+        let mut header = kind.bytes().to_vec();
+        header.extend(b" ");
+        header.extend(size.to_string().into_bytes());
+        header.extend(b"\x00");
+        header
+    }
+
     pub fn from_git_object(obj: &impl GitObject) -> Self {
         let mut data = Vec::<u8>::new();
         obj.serialise(&mut data);
         let size = data.len();
-        let mut content = obj.object_type_code().to_vec();
-        content.extend(b" ");
-        content.extend(size.to_string().into_bytes());
-        content.extend(b"\x00");
-        content.extend(data);
+        let mut content = Self::construct_header(&obj.kind(), size);
+        content.extend(&data);
 
         let mut hasher = Sha1::new();
         hasher.update(&content);
         let object_id = hex::encode(hasher.finalize());
         Self {
-            data: content,
+            data,
             object_id,
             metadata: ObjectMetadata { kind: obj.kind(), size },
         }
@@ -118,10 +123,7 @@ impl RawObject {
     }
 
     pub fn content_with_header(&self) -> Vec<u8> {
-        let mut content = self.metadata.kind.bytes().to_vec();
-        content.extend(b" ");
-        content.extend(self.metadata.size.to_string().into_bytes());
-        content.extend(b"\x00");
+        let mut content = Self::construct_header(&self.metadata.kind, self.metadata.size);
         content.extend(self.data.iter());
         content
     }
@@ -188,7 +190,6 @@ impl StoredObject {
 pub trait GitObject {
     type Implementation;
     fn kind(&self) -> ObjectKind;
-    fn object_type_code(&self) -> &'static [u8];
     fn serialise(&self, buf: &mut Vec<u8>);
     fn deserialise(data: &[u8]) -> Self::Implementation
     where
@@ -223,10 +224,6 @@ impl GitObject for Blob {
 
     fn kind(&self) -> ObjectKind {
         ObjectKind::Blob
-    }
-
-    fn object_type_code(&self) -> &'static [u8] {
-        b"blob"
     }
 
     fn serialise(&self, buf: &mut Vec<u8>) {
@@ -303,10 +300,6 @@ impl GitObject for Commit {
         ObjectKind::Commit
     }
 
-    fn object_type_code(&self) -> &'static [u8] {
-        b"commit"
-    }
-
     fn serialise(&self, buf: &mut Vec<u8>) {
         kvlm_serialise(&self.map, &self.message, buf)
     }
@@ -362,10 +355,6 @@ impl GitObject for Tag {
 
     fn kind(&self) -> ObjectKind {
         ObjectKind::Tag
-    }
-
-    fn object_type_code(&self) -> &'static [u8] {
-        b"tag"
     }
 
     fn serialise(&self, buf: &mut Vec<u8>) {
@@ -555,10 +544,6 @@ impl GitObject for Tree {
 
     fn kind(&self) -> ObjectKind {
         ObjectKind::Tree
-    }
-
-    fn object_type_code(&self) -> &'static [u8] {
-        b"tree"
     }
 
     fn serialise(&self, buf: &mut Vec<u8>) {
