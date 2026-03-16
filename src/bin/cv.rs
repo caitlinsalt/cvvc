@@ -2,16 +2,18 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 
-use cvvc::{cli::{branches, init, log, objects, ref_log, refs, staging}, config::GlobalConfig};
+use cvvc::{
+    cli::{branches, init, log, objects, ref_log, refs, staging},
+    config::GlobalConfig,
+};
 
 fn main() -> ExitCode {
     parse_dispatch()
 }
 
-
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
-pub struct Cli {
+struct Cli {
     #[command(subcommand)]
     command: Commands,
 }

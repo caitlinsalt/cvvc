@@ -1,22 +1,32 @@
 use chrono::{DateTime, Utc};
 use std::{cmp::Ordering, fmt::Display, iter::repeat_n, path::Path};
 
-use self::errors::{InvalidIndexEntryError, InvalidIndexError};
+use self::errors::{
+    InvalidIndexEntryError, InvalidIndexEntryKind, InvalidIndexError, InvalidIndexKind,
+};
 use crate::helpers::{
     self, datetime_to_bytes,
     fs::{index_path_file, index_path_parent, FileMetadata},
 };
 
-mod errors;
+/// Index parse errors
+pub mod errors;
 
+/// The file type of an index entry.
 #[derive(Debug)]
 pub enum IndexEntryType {
+    /// Regular file
     File,
+
+    /// Symbolic link
     Symlink,
+
+    /// Git submodule
     Gitlink,
 }
 
 impl IndexEntryType {
+    /// Parse an [`IndexEntryType`] from a byte
     pub fn from_byte(b: u8) -> Option<Self> {
         match b {
             8 => Some(IndexEntryType::File),
@@ -26,6 +36,7 @@ impl IndexEntryType {
         }
     }
 
+    /// Convert an [`IndexEntryType`] value to a byte
     pub fn to_byte(&self) -> u8 {
         match self {
             IndexEntryType::File => 8,
@@ -46,6 +57,7 @@ impl Display for IndexEntryType {
     }
 }
 
+/// The permissions of an index entry
 #[derive(Debug)]
 pub enum IndexEntryPermissions {
     Executable,
@@ -54,6 +66,8 @@ pub enum IndexEntryPermissions {
 }
 
 impl IndexEntryPermissions {
+    /// Parse an [`IndexEntryPermissions`] value from a [`u16`].  
+    /// If the value is not zero, octal 644 or octal 755, return `None`
     pub fn from_u16(v: u16) -> Option<Self> {
         match v {
             0o644 => Some(IndexEntryPermissions::NonExecutable),
@@ -63,6 +77,7 @@ impl IndexEntryPermissions {
         }
     }
 
+    /// Convert an [`IndexEntryPermissions`] value to a [`u16`].
     pub fn to_u16(&self) -> u16 {
         match self {
             IndexEntryPermissions::Link => 0,
@@ -83,34 +98,82 @@ impl Display for IndexEntryPermissions {
     }
 }
 
+/// The contents of a single index entry.
+///
+/// On Windows, the `dev`, `ino`, `uid` and `gid` fields are not populated, and the `ctime` field has a
+/// different meaning to other platforms.  On other operating systems, these fields also may not be
+/// populated, depending on the type of filesystem the repository is stored on.  This is unlikely to cause
+/// users issues as indexes should not be shared across repositories even if they are clones of each other.
 pub struct IndexEntry {
+    /// On Windows, the file creation time.  On other operating systems, the file metadata change time, if supported.
     pub ctime: DateTime<Utc>,
+
+    /// File modification time
     pub mtime: DateTime<Utc>,
+
+    /// Device number, if supported
     pub dev: u32,
+
+    /// File inode number, if supported
     pub ino: u32,
+
+    /// File type
     pub mode_type: IndexEntryType,
+
+    /// File permissions, largely limited to the executable bit.
     pub mode_perms: IndexEntryPermissions,
+
+    /// User ID of file owner, if supported
     pub uid: u32,
+
+    /// Group ID of file's owning group, if supported
     pub gid: u32,
+
+    /// File size, or [`u32::MAX`] if the file size is larger than that value
     pub fsize: u32,
+
+    /// Within git, this flag is used to indicate that the file should not be checked for changes.
+    /// CVVC does not at present support this functionality and sets this flag to `false` for all new
+    /// index entries.
     pub flag_assume_valid: bool,
+
+    /// Within git, this flag is used to disambiguate unmerged items during a merge, where the same
+    /// path can potentially point to different objects.  At present it is not used within CVVC
     pub flag_stage: u8,
+
+    /// Object ID
     pub object_id: String,
+
+    /// Object path, relative to the worktree, using the ASCII `/` character (charpoint 47) as the path separator
     pub object_name: String,
 }
 
 impl IndexEntry {
+    /// The length of this [`IndexEntry`] when serialised, including trailing padding which rounds the size up
+    /// to a multiple of 8 bytes.
     pub fn byte_length(&self) -> usize {
         // Round up to 8-byte boundary
         let blocks = (self.object_name.len() + 63) / 8 + 1;
         blocks * 8
     }
 
+    /// Parse a byte array as an [`IndexEntry`].
+    ///
+    /// # Errors
+    ///
+    /// If this function fails, it returns an [`InvalidIndexEntryError`].  Its [`InvalidIndexEntryError::error_kind`] field gives the underlying cause of the error, as follows:
+    ///
+    /// - if the array is too short to contain an entry with a name at least one byte in length, or if it is too short to contain a name of the length
+    /// specified in the name length field, it returns [`InvalidIndexEntryKind::TooShort`]
+    /// - if the `ctime` or `mtime` fields are not valid timestamps, it returns [`InvalidIndexEntryKind::UnparseableTimestamp`]
+    /// - if the `mode_type` field is not one of the permitted values expressed by [`IndexEntryType`], it returns [`InvalidIndexEntryKind::UnexpectedMode`]
+    /// - if the `mode_permissions` field is not zero, octal 644 or octal 755, it returns [`InvalidIndexEntryKind::UnexpectedPermissions`]
+    /// - if the name string is not properly terminated, or the name length field is shorter than the actual name length, it returns [`InvalidIndexEntryKind::NameNotNullTerminated`]
     pub fn from_bytes(data: &[u8]) -> Result<IndexEntry, InvalidIndexEntryError> {
         // Shortest possible index entry length, for a single-character filename.
         if data.len() < 64 {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::TooShort,
+                error_kind: InvalidIndexEntryKind::TooShort,
             });
         }
         let ctime_s = helpers::u32_from_be_bytes_unchecked(data, 0);
@@ -118,7 +181,7 @@ impl IndexEntry {
         let ctime = DateTime::<Utc>::from_timestamp(ctime_s.into(), ctime_ns);
         let Some(ctime) = ctime else {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::UnparseableTimestamp(ctime_s, ctime_ns),
+                error_kind: InvalidIndexEntryKind::UnparseableTimestamp(ctime_s, ctime_ns),
             });
         };
         let mtime_s = helpers::u32_from_be_bytes_unchecked(data, 8);
@@ -126,7 +189,7 @@ impl IndexEntry {
         let mtime = DateTime::<Utc>::from_timestamp(mtime_s.into(), mtime_ns);
         let Some(mtime) = mtime else {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::UnparseableTimestamp(mtime_s, mtime_ns),
+                error_kind: InvalidIndexEntryKind::UnparseableTimestamp(mtime_s, mtime_ns),
             });
         };
         let dev = helpers::u32_from_be_bytes_unchecked(data, 16);
@@ -136,13 +199,13 @@ impl IndexEntry {
         let mode_type = IndexEntryType::from_byte(mode_type_val as u8);
         let Some(mode_type) = mode_type else {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::UnexpectedMode(mode_type_val),
+                error_kind: InvalidIndexEntryKind::UnexpectedMode(mode_type_val),
             });
         };
         let mode_perms = IndexEntryPermissions::from_u16(mode & 0x1FF);
         let Some(mode_perms) = mode_perms else {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::UnexpectedPermissions(mode & 0x1FF),
+                error_kind: InvalidIndexEntryKind::UnexpectedPermissions(mode & 0x1FF),
             });
         };
         let uid = helpers::u32_from_be_bytes_unchecked(data, 28);
@@ -155,13 +218,13 @@ impl IndexEntry {
         let name_len: usize = (flags & 0xFFF).into();
         if data.len() < name_len + 63 {
             return Err(InvalidIndexEntryError {
-                error_kind: errors::InvalidIndexEntryKind::TooShort,
+                error_kind: InvalidIndexEntryKind::TooShort,
             });
         }
         let name = if name_len < 0xFFF {
             if data[name_len + 62] != 0 {
                 return Err(InvalidIndexEntryError {
-                    error_kind: errors::InvalidIndexEntryKind::NameNotNullTerminated,
+                    error_kind: InvalidIndexEntryKind::NameNotNullTerminated,
                 });
             }
             String::from_utf8_lossy(&data[62..(name_len + 62)])
@@ -169,7 +232,7 @@ impl IndexEntry {
             let real_name_len = data[62..].iter().position(|x| *x == 0);
             let Some(real_name_len) = real_name_len else {
                 return Err(InvalidIndexEntryError {
-                    error_kind: errors::InvalidIndexEntryKind::NameNotNullTerminated,
+                    error_kind: InvalidIndexEntryKind::NameNotNullTerminated,
                 });
             };
             String::from_utf8_lossy(&data[62..(real_name_len + 62)])
@@ -191,6 +254,14 @@ impl IndexEntry {
         })
     }
 
+    /// Create a new index entry for the file at a given path.
+    ///
+    /// Loads the file's current metadata from the filesystem  and turns it into an index entry.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if the file does not exist, or any other filesystem error occurs
+    /// when loading the file's metadata.
     pub fn from_file(
         path: &Path,
         object_id: String,
@@ -214,7 +285,10 @@ impl IndexEntry {
         })
     }
 
-    pub fn serialise(&self, buf: &mut Vec<u8>) {
+    /// Write the contents of an index entry to an extensible byte sequence.
+    ///
+    /// The index entry is written in the Git on-disk index format.
+    pub fn serialise<T: Extend<u8>>(&self, buf: &mut T) {
         buf.extend(datetime_to_bytes(&self.ctime));
         buf.extend(datetime_to_bytes(&self.mtime));
         buf.extend(self.dev.to_be_bytes());
@@ -227,7 +301,7 @@ impl IndexEntry {
         buf.extend(self.fsize.to_be_bytes());
         let obj_id = hex::decode(&self.object_id);
         if let Ok(obj_id) = obj_id {
-            buf.extend(obj_id.iter());
+            buf.extend(obj_id.iter().copied());
         } else {
             buf.extend(repeat_n(0_u8, 20));
         }
@@ -241,19 +315,24 @@ impl IndexEntry {
         flags |= capped_len;
         buf.extend(flags.to_be_bytes());
         buf.extend(self.object_name.bytes());
-        buf.push(0);
+        buf.extend([0]);
         // The formula for computing the entry length only works on v2 indexes (that pesky hardcoded 63 I just perpetrated)
         buf.extend(repeat_n(0, 8 - ((self.object_name.len() + 63) % 8)));
     }
 
+    /// Get the parent directory of this entry.
+    ///
+    /// Returns an empty string if the entry is in the worktree root.
     pub fn object_directory_name(&self) -> &str {
         index_path_parent(&self.object_name)
     }
 
+    /// Get the filename of this entry
     pub fn object_file_name(&self) -> &str {
         index_path_file(&self.object_name)
     }
 
+    /// Get the combined [`IndexEntryType`] and [`IndexEntryPermissions`] fields of this entry, as a [`u32`] value as stored on disk.
     pub fn mode(&self) -> u32 {
         let mt = match self.mode_type {
             IndexEntryType::File => 0o100000,
@@ -270,6 +349,7 @@ impl IndexEntry {
 }
 
 impl Ord for IndexEntry {
+    /// Order two index entries by name and then by merge stage
     fn cmp(&self, other: &Self) -> Ordering {
         match self.object_name.bytes().cmp(other.object_name.bytes()) {
             Ordering::Equal => self.flag_stage.cmp(&other.flag_stage),
@@ -293,12 +373,16 @@ impl PartialEq for IndexEntry {
 
 impl Eq for IndexEntry {}
 
+/// The in-memory representation of an entire index.
 pub struct Index {
+    /// The index version number.  At present, CVVC only supports v2 indexes.
     pub version: u32,
+
     entries: Vec<IndexEntry>,
 }
 
 impl Index {
+    /// Create an empty index
     pub fn new() -> Self {
         Index {
             version: 2,
@@ -306,25 +390,42 @@ impl Index {
         }
     }
 
+    /// Get a reference to the index's entries.
     pub fn entries(&self) -> &[IndexEntry] {
         &self.entries
     }
 
+    /// Load an index from a sequence of bytes.
+    ///
+    /// # Errors
+    ///
+    /// If an error occurs on load, this function returns an [`InvalidIndexError`] with the
+    /// [`InvalidIndexError::error_kind`] field indicating the reason for the error as follows:
+    ///
+    /// - if the data is too short to contain a valid header, it returns [`InvalidIndexKind::TooShort`]
+    /// - if the data does not start with the correct identification byte sequence, it returns [`InvalidIndexKind::MissingMagic`]
+    /// - if the index header does not indicate index version 2, it returns [`InvalidIndexKind::UnsupportedVersion`]
+    /// - if any individual index entry cannot be parsed, it returns [`InvalidIndexKind::InvalidEntry`], which contains the
+    /// underlying [`InvalidIndexEntryError`]
+    ///
+    /// If the data is too short to contain the number of entries specified in the header, the error kind may
+    /// be either [`InvalidIndexKind::TooShort`] or [`InvalidIndexKind::InvalidEntry`] depending on whether or not the
+    /// end of the data occurs at the end of a valid entry.
     pub fn from_bytes(data: &[u8]) -> Result<Index, InvalidIndexError> {
         if data.len() < 12 {
             return Err(InvalidIndexError {
-                error_kind: errors::InvalidIndexKind::TooShort,
+                error_kind: InvalidIndexKind::TooShort,
             });
         }
         if data[..4] != *b"DIRC" {
             return Err(InvalidIndexError {
-                error_kind: errors::InvalidIndexKind::MissingMagic,
+                error_kind: InvalidIndexKind::MissingMagic,
             });
         }
         let version = helpers::u32_from_be_bytes_unchecked(data, 4);
         if version != 2 {
             return Err(InvalidIndexError {
-                error_kind: errors::InvalidIndexKind::UnsupportedVersion(version),
+                error_kind: InvalidIndexKind::UnsupportedVersion(version),
             });
         }
         let count = usize::try_from(helpers::u32_from_be_bytes_unchecked(data, 8)).unwrap();
@@ -336,18 +437,29 @@ impl Index {
                 Ok(e) => e,
                 Err(e) => {
                     return Err(InvalidIndexError {
-                        error_kind: errors::InvalidIndexKind::InvalidEntry(e),
+                        error_kind: InvalidIndexKind::InvalidEntry(e),
                     })
                 }
             };
             idx += entry.byte_length();
+            if idx >= data.len() {
+                return Err(InvalidIndexError {
+                    error_kind: errors::InvalidIndexKind::TooShort,
+                });
+            }
             entries.push(entry);
         }
         Ok(Index { version, entries })
     }
 
-    pub fn serialise(&self, buf: &mut Vec<u8>) {
-        buf.extend(b"DIRC");
+    /// Write an [`Index`] to an extensible byte sequence.
+    ///
+    /// The index entry is written in the Git on-disk index format, version 2.
+    ///
+    /// You must not call this method if the index contents are not sorted.  If you
+    /// do, then the serialised data may not be readable.
+    pub fn serialise<T: Extend<u8>>(&self, buf: &mut T) {
+        buf.extend([68, 73, 82, 67]); // equivalent of b"DIRC"
         buf.extend(self.version.to_be_bytes());
         let truncated_count = if self.entries.len() > (u32::MAX as usize) {
             u32::MAX
@@ -360,25 +472,49 @@ impl Index {
         }
     }
 
+    /// Determine if this index contains an entry with the given path.
+    ///
+    /// The path must match an index entry's path exactly.
     pub fn contains_path(&self, path: &str) -> bool {
         self.entries.iter().any(|e| e.object_name == path)
     }
 
+    /// Remove a path from this index.
+    ///
+    /// Returns true if an entry with this path was present in the index, false if the index was unchanged.
     pub fn remove(&mut self, path: &str) -> bool {
         let start_len = self.entries.len();
         self.entries.retain(|e| e.object_name != path);
         start_len > self.entries.len()
     }
 
+    /// Retain all of the index entries whose object IDs are in a given list, and remove all of the
+    /// entries whose IDs are not on that list.
     pub fn remove_not_present(&mut self, object_ids: &[String]) {
         self.entries.retain(|e| object_ids.contains(&e.object_id));
     }
 
+    /// Append an entry to the index, making it invalid to use until sorted.
+    ///
+    /// This method does not sort the index, for efficiency when adding multiple entries successively.
+    ///
+    /// After calling this method, you may call this method again one or more times, and you may sort
+    /// the index by calling [`Index::sort`].  Until you have called [`Index::sort`] the result of index
+    /// lookups is undefined, and the data written by [`Index::serialise`] will not be Git-interoperable,
+    /// or readable by CVVC.
     pub fn add_unsorted(&mut self, entry: IndexEntry) {
+        // this enforces the guarantee that if you call this method but
+        // do not sort the index, the index will be unreadable.
+        self.version = 12091906;
         self.entries.push(entry);
     }
 
+    ///  Sorts the index.  Must be called after calling [`Index::add_unsorted`].
+    ///
+    /// Calling this method is necessary after using [`Index::add_unsorted`], because the behaviour of
+    /// index lookups is undefined if the index is unsorted.
     pub fn sort(&mut self) {
         self.entries.sort();
+        self.version = 2;
     }
 }

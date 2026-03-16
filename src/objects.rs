@@ -2,24 +2,27 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, TimeZone};
 use indexmap::IndexMap;
 use sha1::{Digest, Sha1};
-use std::{
-    cmp::Ordering,
-    fmt::Display,
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::{cmp::Ordering, fmt::Display, fs, io::Read, path::Path};
 
 use crate::{
-    errors::InvalidObjectError, helpers::timestamped_name, index::IndexEntry, repo::Repository,
+    helpers::timestamped_name, index::IndexEntry, objects::errors::InvalidObjectIdError,
+    repo::Repository,
 };
 
+/// Object-related error structs.
+pub mod errors;
+
+/// Metadata describing a [`RawObject`].
 pub struct ObjectMetadata {
+    /// The type of object.
     pub kind: ObjectKind,
+
+    /// The length of the object's serialised data.
     pub size: usize,
 }
 
 impl ObjectMetadata {
+    /// Create a new [`ObjectMetadata`] instance.
     pub fn new(kind: ObjectKind, size: usize) -> Self {
         Self { kind, size }
     }
@@ -28,6 +31,31 @@ impl ObjectMetadata {
 impl TryFrom<&[u8]> for ObjectMetadata {
     type Error = anyhow::Error;
 
+    /// Convert a sequence of bytes to an [`ObjectMetadata`] instance.  The
+    /// sequence of bytes must contain the entire object that the metadata
+    /// applies to, as well as the header which is decoded to produce the return object.
+    ///
+    /// The start of data is expected to be in the format used as the object header by
+    /// the loose object store.  It consists of:
+    /// - a 3-5 byte sequence containing the object type in ASCII
+    /// - an ASCII space (charpoint 32)
+    /// - the length of the object's data, as an ASCII string, in base 10.
+    /// - a zero byte.
+    ///
+    /// The length of the object does not include this header.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if:
+    /// - the data does not contain a space character
+    /// - the data does not contain a zero byte
+    /// - the data before the first space character is not a valid object type tag
+    /// (one of `blob`, `commit`, `tree` or `tag`)
+    /// - the data between the first space character and the first zero byte is not
+    /// a valid base-10 number when interpreted as ASCII or as UTF-8
+    /// - the length field's value is greater than [`usize::MAX`]
+    /// - the length of the remainder of the data, following the first zero byte,
+    /// does not match the value of the length field.
     fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
         let type_end_index = data.iter().position(|&x| x == 0x20).ok_or(anyhow!(
             "malformed object: end of object type code not found"
@@ -60,6 +88,25 @@ impl TryFrom<&[u8]> for ObjectMetadata {
     }
 }
 
+/// A serialised object in memory, together with its ID and type.
+///
+/// This struct represents a partially-parsed object which has either just been loaded from
+/// an object store, or is ready to be written to an object store.
+///
+/// Git stores object metadata differently for loose objects and packed objects.  However,
+/// the object ID is derived from the object preceded by the loose object metadata format,
+/// not as preceded by the packed object metadata format.   Moreover, when stored, a loose
+/// object and its metadata are compressed as a whole, header-first; whereas for a packed
+/// object only the object data proper is compressed.
+///
+/// To handle this cleanly in CVVC, the `RawObject` struct abstracts over both formats.  The
+/// object data proper is referred to as "headerless content", and the (uncompressed) loose object
+/// format, with header followed by object data, is referred to as "with-header content".   The
+/// former can be accessed by the [`RawObject::content_headerless`] method; the latter by the
+/// [`RawObject::content_with_header`] method.  The equivalent construction functions are
+/// [`RawObject::from_headerless_data`], which requires a separate metadata parameter, and
+/// [`RawObject::from_data_with_header`], which requires an object ID parameter but parses the
+/// object metadata from the header.
 pub struct RawObject {
     data: Vec<u8>,
     object_id: String,
@@ -67,6 +114,12 @@ pub struct RawObject {
 }
 
 impl RawObject {
+    /// Create a [`RawObject`] from with-header content data.
+    ///
+    /// This function will return an error if any of the reasons given in [`ObjectMetadata::try_from`]
+    /// apply to the data.
+    ///
+    /// This function does not verify that the object ID is correct.
     pub fn from_data_with_header(data: &[u8], object_id: &str) -> Result<Self, anyhow::Error> {
         let metadata = ObjectMetadata::try_from(data)
             .with_context(|| format!("failed to load {}", object_id))?;
@@ -78,7 +131,8 @@ impl RawObject {
         })
     }
 
-    pub fn from_headless_data(data: &[u8], object_id: &str, metadata: ObjectMetadata) -> Self {
+    /// Create a [`RawObject`] from headerless content data and separate metadata
+    pub fn from_headerless_data(data: &[u8], object_id: &str, metadata: ObjectMetadata) -> Self {
         Self {
             data: data.to_vec(),
             object_id: object_id.to_string(),
@@ -94,6 +148,10 @@ impl RawObject {
         header
     }
 
+    /// Create a [`RawObject`] from an existing in-memory object.
+    ///
+    /// The object will be serialised, and its ID will be computed.
+    /// The data in the [`RawObject`] is copied.
     pub fn from_git_object(obj: &impl GitObject) -> Self {
         let mut data = Vec::<u8>::new();
         obj.serialise(&mut data);
@@ -114,25 +172,32 @@ impl RawObject {
         }
     }
 
-    pub fn content_headless(&self) -> &[u8] {
+    /// Get the headerless content of a [`RawObject`]
+    pub fn content_headerless(&self) -> &[u8] {
         &self.data
     }
 
+    /// Get the content of a [`RawObject`] with the metadata header prepended.
+    ///
+    /// The data returned is identical to the uncompressed content of a loose object file on disk.
     pub fn content_with_header(&self) -> Vec<u8> {
         let mut content = Self::construct_header(&self.metadata.kind, self.metadata.size);
         content.extend(self.data.iter());
         content
     }
 
+    /// Get the object's ID.
     pub fn object_id(&self) -> &str {
         &self.object_id
     }
 
+    /// Get the object's metadata.
     pub fn metadata(&self) -> &ObjectMetadata {
         &self.metadata
     }
 }
 
+/// The legal types of repository object.
 pub enum ObjectKind {
     Blob,
     Commit,
@@ -141,6 +206,10 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
+    /// Get a byte representation of an [`ObjectKind`] value.
+    ///
+    /// The byte representations are as used in the header of a loose object, and
+    /// consist of the ASCII strings `blob`, `commit`, `tree` and `tag`.
     pub fn bytes(&self) -> &[u8] {
         match self {
             ObjectKind::Blob => b"blob",
@@ -154,6 +223,10 @@ impl ObjectKind {
 impl TryFrom<&[u8]> for ObjectKind {
     type Error = anyhow::Error;
 
+    /// Attempt to parse a byte sequence as an [`ObjectKind`] value.
+    ///
+    /// The byte sequence must match one of the values that can be
+    /// output by [`ObjectKind::bytes`] otherwise an error will be returned.
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         match value {
             b"blob" => Ok(ObjectKind::Blob),
@@ -165,6 +238,7 @@ impl TryFrom<&[u8]> for ObjectKind {
     }
 }
 
+/// An enumeration that is similar to [`ObjectKind`], but also wraps the object itself.
 pub enum StoredObject {
     Blob(Blob),
     Commit(Commit),
@@ -173,6 +247,7 @@ pub enum StoredObject {
 }
 
 impl StoredObject {
+    /// Serialise the object stored in this enum.
     pub fn serialise(&self, buf: &mut Vec<u8>) {
         match self {
             StoredObject::Blob(x) => x.serialise(buf),
@@ -183,20 +258,35 @@ impl StoredObject {
     }
 }
 
+/// The trait which describes all repository objects, supporting binary serialisation and
+/// deserialisation to and from byte sequences.
+///
+/// Implementations of this trait must be on [`Sized`] structs.
 pub trait GitObject {
-    type Implementation;
+    /// Get the appropriate [`ObjectKind`] value for this repository object.
     fn kind(&self) -> ObjectKind;
+
+    /// Convert this tag to a byte sequence
     fn serialise(&self, buf: &mut Vec<u8>);
-    fn deserialise(data: &[u8]) -> Self::Implementation
+
+    /// Parse a byte sequence into an in-memory repository object.
+    fn deserialise(data: &[u8]) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
 }
 
+/// In-memory representation of a repository blob object.
 pub struct Blob {
     data: Vec<u8>,
 }
 
 impl Blob {
+    /// Load a blob from a reader.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the reader's [`Read::read_to_end`] implementation
+    /// returns an error.
     pub fn new_from_read(source: &mut impl Read) -> Result<Self, anyhow::Error> {
         let mut buf: Vec<u8> = Vec::new();
         source
@@ -205,60 +295,90 @@ impl Blob {
         Ok(Blob { data: buf })
     }
 
+    /// Load a blob from a file.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if it encounters any errors reading from the filesystem.
     pub fn new_from_path<P: AsRef<Path>>(source_path: P) -> Result<Self, anyhow::Error> {
         let mut file = std::fs::File::open(source_path).context("could not read file")?;
         Self::new_from_read(&mut file)
     }
 
+    /// Get the content of the blob.
     pub fn data(&self) -> &[u8] {
         &self.data
     }
 }
 
 impl GitObject for Blob {
-    type Implementation = Blob;
-
+    /// Get the [`ObjectKind`] value of this repository object.
+    ///
+    /// This method always returns [`ObjectKind::Blob`]
     fn kind(&self) -> ObjectKind {
         ObjectKind::Blob
     }
 
+    /// Serialise this blob to a byte sequence.
     fn serialise(&self, buf: &mut Vec<u8>) {
         buf.clear();
         buf.extend_from_slice(&self.data);
     }
 
-    fn deserialise(data: &[u8]) -> Self::Implementation
+    /// Parse a byte sequence as a [`Blob`].
+    ///
+    /// This function is infallible.
+    fn deserialise(data: &[u8]) -> Result<Self, anyhow::Error>
     where
         Self: Sized,
     {
-        Blob {
+        Ok(Blob {
             data: data.to_vec(),
-        }
+        })
     }
 }
 
+/// In-memory representation of a repository commit object.
 pub struct Commit {
     map: IndexMap<String, Vec<String>>,
+
+    /// The commit's commit message.
     pub message: String,
 }
 
 impl Commit {
-    pub fn map(&self) -> &IndexMap<String, Vec<String>> {
-        &self.map
-    }
-
-    pub fn tree(&self) -> Result<String, InvalidObjectError> {
+    /// Get the ID of the root tree object for this commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidObjectIdError`] if the commit does not have a tree object.
+    pub fn tree(&self) -> Result<String, InvalidObjectIdError> {
         let target = self.map.get("tree");
         let Some(target) = target else {
-            return Err(InvalidObjectError {});
+            return Err(InvalidObjectIdError {});
         };
         let target = target.first();
         let Some(target) = target else {
-            return Err(InvalidObjectError {});
+            return Err(InvalidObjectIdError {});
         };
         Ok(target.to_string())
     }
 
+    ///  Gets the parent(s) of this commit.
+    ///
+    /// Returns an empty vector if the commit has no parents.
+    pub fn parents(&self) -> Vec<String> {
+        if self.map.contains_key("parent") {
+            self.map["parent"]
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+        } else {
+            vec![]
+        }
+    }
+
+    /// Create a new commit with zero or one parents.
     pub fn new<Tz>(
         tree_id: &str,
         parent_id: Option<&str>,
@@ -290,36 +410,46 @@ impl Commit {
 }
 
 impl GitObject for Commit {
-    type Implementation = Commit;
-
+    /// Get an [`ObjectKind`] value for this repository object.
+    ///
+    /// This method always returns [`ObjectKind::Commit`]
     fn kind(&self) -> ObjectKind {
         ObjectKind::Commit
     }
 
+    /// Serialise this blob to a byte sequence.
     fn serialise(&self, buf: &mut Vec<u8>) {
         kvlm_serialise(&self.map, &self.message, buf)
     }
 
-    fn deserialise(data: &[u8]) -> Self::Implementation
+    /// Parse a byte sequence as a [`Commit`].
+    ///
+    /// This function will return an error if the commit cannot be parsed.  This may occur
+    /// if the commit data does not use Unix line endings (whatever the system), or if it
+    /// contains text which cannot be cleanly converted to UTF-8.
+    fn deserialise(data: &[u8]) -> Result<Self, anyhow::Error>
     where
         Self: Sized,
     {
         let mut map = IndexMap::<String, Vec<String>>::new();
-        let message = kvlm_parse(data, &mut map).expect("Failed to parse commit");
-        Commit { map, message }
+        let message = kvlm_parse(data, &mut map).context("Failed to parse commit")?;
+        Ok(Commit { map, message })
     }
 }
 
+/// In-memory representation of a tag object, also known as a "chunky tag" or "annotated tag"
 pub struct Tag {
     map: IndexMap<String, Vec<String>>,
+
+    /// The tag's tagging message.
     pub message: String,
 }
 
 impl Tag {
-    pub fn _map(&self) -> &IndexMap<String, Vec<String>> {
-        &self.map
-    }
-
+    /// Create a repository tag object, with a default tagging message.
+    ///
+    /// At present this function should largely be seen as a proof of concept; it does not let you
+    /// set the message or the tagger details.
     pub fn create(target: &str, name: &str) -> Self {
         let message = String::from("A tag created by Cait's Version of Version Control (CVVC)");
         let mut map = IndexMap::<String, Vec<String>>::new();
@@ -333,54 +463,73 @@ impl Tag {
         Tag { map, message }
     }
 
-    pub fn target(&self) -> Result<String, InvalidObjectError> {
+    /// Get the target ID of this tag
+    ///
+    /// Returns an error if the tag object's "target" property is missing, but does not check if it
+    /// is a valid object ID.
+    pub fn target(&self) -> Result<String, InvalidObjectIdError> {
         let target = self.map.get("object");
         let Some(target) = target else {
-            return Err(InvalidObjectError {});
+            return Err(InvalidObjectIdError {});
         };
         let target = target.first();
         let Some(target) = target else {
-            return Err(InvalidObjectError {});
+            return Err(InvalidObjectIdError {});
         };
         Ok(target.to_string())
     }
 }
 
 impl GitObject for Tag {
-    type Implementation = Tag;
-
+    /// Get an [`ObjectKind`] value for this repository object.
+    ///
+    /// This method always returns [`ObjectKind::Tag`]
     fn kind(&self) -> ObjectKind {
         ObjectKind::Tag
     }
 
+    /// Convert this tag to a byte sequence.
     fn serialise(&self, buf: &mut Vec<u8>) {
         kvlm_serialise(&self.map, &self.message, buf)
     }
 
-    fn deserialise(data: &[u8]) -> Self::Implementation
+    /// Parse a byte sequence into a [`Tag`] object.
+    ///
+    /// This function will return an error if the tag cannot be parsed.  This may occur
+    /// if the tag data does not use Unix line endings (whatever the system), or if it
+    /// contains text which cannot be cleanly converted to UTF-8.
+    fn deserialise(data: &[u8]) -> Result<Self, anyhow::Error>
     where
         Self: Sized,
     {
         let mut map = IndexMap::<String, Vec<String>>::new();
-        let message = kvlm_parse(data, &mut map).expect("Failed to parse tag");
-        Tag { map, message }
+        let message = kvlm_parse(data, &mut map).context("Failed to parse tag")?;
+        Ok(Tag { map, message })
     }
 }
 
+/// An individual entry in a repository tree object.
+///
+/// The object ID field points to either a tree object or blob object.
 #[derive(Clone)]
 pub struct TreeNode {
+    /// The item's file mode
     pub mode: u32,
-    pub path: PathBuf,
+
+    /// The filename of the item
+    pub name: String,
+
+    /// The object ID of the item as stored in the repository.
     pub object_id: String,
 }
 
-pub struct TreeNodeParsingResult {
+struct TreeNodeParsingResult {
     consumed: usize,
     node: TreeNode,
 }
 
 impl TreeNode {
-    pub fn from_bytes(data: &[u8]) -> Result<TreeNodeParsingResult, anyhow::Error> {
+    fn from_bytes(data: &[u8]) -> Result<TreeNodeParsingResult, anyhow::Error> {
         let space_pos = data.iter().position(|x| *x == 0x20);
         let Some(space_pos) = space_pos else {
             return Err(anyhow!("Mode terminator character not found in tree entry"));
@@ -403,50 +552,64 @@ impl TreeNode {
         }
         let path = str::from_utf8(&data[(space_pos + 1)..(space_pos + null_pos + 1)])
             .context("Could not parse path field of tree entry as valid UTF8")?;
-        let path_buf = PathBuf::from(path);
         let object_id = hex::encode(&data[(space_pos + null_pos + 2)..(space_pos + null_pos + 22)]);
         Ok(TreeNodeParsingResult {
             consumed: space_pos + null_pos + 22,
             node: TreeNode {
                 mode,
-                path: path_buf,
+                name: path.to_string(),
                 object_id,
             },
         })
     }
 
+    /// Create a [`TreeNode`] from an [`IndexEntry`]
     pub fn from_index_entry(ixe: &IndexEntry) -> Self {
         Self {
             mode: ixe.mode(),
-            path: Path::new(&ixe.object_file_name()).to_path_buf(),
+            name: ixe.object_file_name().to_string(),
             object_id: ixe.object_id.to_string(),
         }
     }
 
+    /// Create a [`TreeNode`] from a subtree.
+    ///
+    /// It is implied that the `object_id` parameter should be a valid
+    /// object ID that points to another tree object, but this is not
+    /// validated by the function.
     pub fn from_subtree(dir_name: &str, object_id: &str) -> Self {
         Self {
             mode: 0o40000,
-            path: Path::new(dir_name).to_path_buf(),
+            name: dir_name.to_string(),
             object_id: object_id.to_string(),
         }
     }
 
     fn ordering_path(&self) -> String {
         if self.mode >= 0o100000 {
-            self.path.to_string_lossy().to_string()
+            self.name.to_string()
         } else {
-            self.path.to_string_lossy().to_string() + "/"
+            self.name.to_string() + "/"
         }
     }
 }
 
 impl Ord for TreeNode {
+    /// Returns an ordering between two [`TreeNode`] objects.
+    ///
+    /// If the objects point to files, they are ordered by [`TreeNode::name`].
+    /// If they point to directories, they are ordered by [`TreeNode::name`] with
+    /// a `/` character prepended.  This can change the ordering in cases where
+    /// a directory name is a prefixed substring of a filename in the same parent
+    /// directory.
     fn cmp(&self, other: &Self) -> Ordering {
         self.ordering_path().cmp(&other.ordering_path())
     }
 }
 
 impl PartialOrd for TreeNode {
+    /// Returns an ordering between two [`TreeNode`] objects.  See the documentation
+    /// for [`TreeNode::cmp`] for further information.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -460,50 +623,51 @@ impl PartialEq for TreeNode {
 
 impl Eq for TreeNode {}
 
+/// An in-memory representation of a repository tree object.
+///
+/// A tree object is the stored representation of a single directory in the worktree,
+/// rather than representing an entire directory tree.
 pub struct Tree {
     entries: Vec<TreeNode>,
 }
 
 impl Tree {
+    /// Create an empty tree
     pub fn new() -> Tree {
         Tree {
             entries: Vec::<TreeNode>::new(),
         }
     }
 
+    /// Get a reference to the entries in this tree.
     pub fn entries(&self) -> &[TreeNode] {
         &self.entries
     }
 
-    pub fn _add_entry(&mut self, entry: TreeNode) {
-        self.entries.push(entry);
-        self.sort();
-    }
-
+    /// Add entries to this tree, moving ownership of them to the tree.
+    ///
+    /// The tree is re-sorted after insertion.
     pub fn add_entries(&mut self, entries: &mut Vec<TreeNode>) {
         self.entries.append(entries);
-        self.sort();
-    }
-
-    pub fn from_bytes(data: &[u8]) -> Result<Self, anyhow::Error> {
-        let mut entries = Vec::<TreeNode>::new();
-        let mut pos: usize = 0;
-        let data_len = data.len();
-        while pos < data_len {
-            let node = TreeNode::from_bytes(&data[pos..])?;
-            entries.push(node.node);
-            pos += node.consumed;
-        }
-
-        let mut tree = Self::new();
-        tree.add_entries(&mut entries);
-        Ok(tree)
-    }
-
-    fn sort(&mut self) {
         self.entries.sort();
     }
 
+    /// Read all of the contents of this tree and its subtrees from the repository, and copy
+    /// them to the filesystem.
+    ///
+    /// If successful, this method returns a vector of all of the object IDs which were written
+    /// to the filesystem.
+    ///
+    /// This method is not atomic.  If this method returns an error, any changes it has already
+    /// made to the filesystem will not be undone.  
+    ///
+    /// # Errors
+    ///
+    /// This function will error if an object cannot be found in the repository, or if it encounters
+    /// any errors upon writing to the filesystem.
+    ///
+    /// This function will error if the tree contains a link to a submodule.  CVVC does not currently
+    /// support submodules.
     pub fn checkout(&self, repo: &Repository, path: &Path) -> Result<Vec<String>, anyhow::Error> {
         let mut objects_checked_out = Vec::<String>::new();
         for entry in &self.entries {
@@ -511,7 +675,7 @@ impl Tree {
             let Some(obj) = obj else {
                 return Err(anyhow!("Object {} not found", entry.object_id));
             };
-            let path = path.join(&entry.path);
+            let path = path.join(&entry.name);
             match obj {
                 StoredObject::Tree(tree) => {
                     fs::create_dir(&path)?;
@@ -536,31 +700,56 @@ impl Tree {
 }
 
 impl GitObject for Tree {
-    type Implementation = Tree;
-
+    /// Get an [`ObjectKind`] value for this repository object.
+    ///
+    /// This method always returns [`ObjectKind::Tree`]
     fn kind(&self) -> ObjectKind {
         ObjectKind::Tree
     }
 
+    /// Convert this tree to a byte sequence.
+    ///
+    /// If any tree entries' object IDs are not valid, in the sense that they
+    /// cannot be converted into a byte sequence in the expected way, the entry
+    /// will be skipped.  This does not require the object IDs to represent
+    /// extant, valid repository objects.
     fn serialise(&self, buf: &mut Vec<u8>) {
         for entry in self.entries() {
             let mode_str = format!("{:05o}", entry.mode);
-            buf.append(Vec::from_iter(mode_str.bytes()).as_mut());
+            let Ok(hex_id) = hex::decode(&entry.object_id) else {
+                continue;
+            };
+            buf.extend(mode_str.bytes());
             buf.push(0x20);
-            buf.append(entry.path.to_string_lossy().as_bytes().to_vec().as_mut());
+            buf.extend(entry.name.bytes());
             buf.push(0);
-            buf.append(hex::decode(&entry.object_id).unwrap().as_mut());
+            buf.extend(hex_id);
         }
     }
 
-    fn deserialise(data: &[u8]) -> Self::Implementation
+    /// Parse a tree object from a byte sequence
+    ///
+    /// This function will return an error if any entries in the tree cannot be parsed.
+    fn deserialise(data: &[u8]) -> Result<Self, anyhow::Error>
     where
         Self: Sized,
     {
-        Tree::from_bytes(data).unwrap()
+        let mut entries = Vec::<TreeNode>::new();
+        let mut pos: usize = 0;
+        let data_len = data.len();
+        while pos < data_len {
+            let node = TreeNode::from_bytes(&data[pos..])?;
+            entries.push(node.node);
+            pos += node.consumed;
+        }
+
+        let mut tree = Self::new();
+        tree.add_entries(&mut entries);
+        Ok(tree)
     }
 }
 
+/// Check whether or not a [`StoredObject`] value matches the equivalent [`ObjectKind`] value
 pub fn stored_object_matches_kind(kind: &ObjectKind, obj: &StoredObject) -> bool {
     match kind {
         ObjectKind::Blob => {
@@ -635,7 +824,7 @@ fn kvlm_serialise(map: &IndexMap<String, Vec<String>>, message: &str, buf: &mut 
     buf.append(message.as_bytes().to_vec().as_mut());
 }
 
-/// Find the first index in a slice of a particular value, where it's not followed immediately by another specific value.
+// Find the first index in a slice of a particular value, where it's not followed immediately by another specific value.
 fn find_without(data: &[u8], with: u8, without: u8) -> Option<usize> {
     let mut next_with = 0;
     loop {

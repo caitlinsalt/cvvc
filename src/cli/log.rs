@@ -5,12 +5,13 @@ use crate::{
 };
 use std::collections::HashSet;
 
+/// Entry point for the `cv log` command
 pub fn cmd(commit: &str) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     log_from_repo(repo, commit)
 }
 
-pub fn log_from_repo(repo: Repository, commit: &str) -> Result<(), anyhow::Error> {
+fn log_from_repo(repo: Repository, commit: &str) -> Result<(), anyhow::Error> {
     let mut seen = HashSet::<String>::new();
     let starting_node = repo.find_object(commit, Some(ObjectKind::Commit), true)?;
 
@@ -45,12 +46,9 @@ pub fn log_object_graphviz<'a>(
             object_name
         };
         println!("  c_{object_name} [label=\"{object_name_start}: {printable_message}\"]");
-
-        if commit.map().contains_key("parent") {
-            for p in commit.map()["parent"].iter() {
-                println!("  c_{object_name} -> c_{p};");
-                log_object_graphviz(repo, p, seen)?;
-            }
+        for p in commit.parents().iter() {
+            println!("  c_{object_name} -> c_{p};");
+            log_object_graphviz(repo, p, seen)?;
         }
     }
     Ok(())

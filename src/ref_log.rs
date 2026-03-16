@@ -9,15 +9,35 @@ use std::{
 
 use crate::repo::is_partial_object_id;
 
+/// An entry in a ref log.
 #[derive(Debug)]
 pub struct RefLogEntry {
+    /// The previous commit ID.
+    ///
+    /// This can be `None` for the first entry in a specific reflog,
+    /// for example on repository clone or on branch creation.
     pub old_object_id: Option<String>,
+
+    /// The new commit ID.
     pub new_object_id: String,
+
+    /// The name and email of the committer, and the timestamp of the event.
+    ///
+    /// This is stored in the same format as the `committer` and `author` fields
+    /// of a commit: "real name <email@example.com> nnnn +xx" where `nnnn` is the
+    /// timestamp in seconds-since-datum format, and `+xx` is the timezone offset
+    /// from UTC.
     pub committer: String,
+
+    /// The ref log message.  By convention this indicates the action and a message
+    /// such as "commit: [first line of message]" or "checkout: switched from branch-a to
+    /// branch-b", but the message can potentially be an arbitrary string if a ref log entry
+    /// was inserted via Git plumbing commands.
     pub message: String,
 }
 
 impl RefLogEntry {
+    /// Create a new ref log entry.
     pub fn new(
         old_object_id: Option<&str>,
         new_object_id: &str,
@@ -36,6 +56,14 @@ impl RefLogEntry {
 impl FromStr for RefLogEntry {
     type Err = &'static str;
 
+    /// Convert a string to a [`RefLogEntry`].
+    ///
+    /// The string should consist of two potentially valid object IDs, each followed by a space;
+    /// then a user name, email and timestamp, followed optionally by a tab and an arbitrary message.
+    ///
+    /// This function will return an error if this does not apply.  It does not verify the format of the
+    /// user name, email and timestamp.  For the initial "old ID" field, a string of 40 zeroes is accepted
+    /// if the ref log entry has no old ID value.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value.len() < 43
             || !is_partial_object_id(&value[..20])
@@ -71,10 +99,14 @@ impl FromStr for RefLogEntry {
 }
 
 impl Display for RefLogEntry {
+    /// Format a [`RefLogEntry`] value as text.
+    ///
+    /// This function is the inverse of [`RefLogEntry::from_str`], and converts a [`RefLogEntry`] object to its
+    /// on-disk format.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let old_object_id = match &self.old_object_id {
             Some(id) => id.as_str(),
-            None => "00000000000000000000",
+            None => "0000000000000000000000000000000000000000",
         };
         write!(
             f,
@@ -84,17 +116,26 @@ impl Display for RefLogEntry {
     }
 }
 
+/// A structure used to access a set of ref logs.
 pub struct RefLog {
     base_path: PathBuf,
 }
 
 impl RefLog {
+    /// Create a new in-memory [`RefLog`] object representing ref logs stored under the given path.
+    ///
+    /// The path does not have to exist.  If it does not, [`RefLog::create`] will try to create it.
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         Self {
             base_path: path.as_ref().to_path_buf(),
         }
     }
 
+    /// Create the directory structure for storing a set of ref logs, if it does not exist.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if it encounters any error writing to the filesystem.
     pub fn create(&self) -> Result<(), anyhow::Error> {
         if !self.base_path.exists() {
             fs::create_dir_all(&self.base_path).context("Failed to create ref log directory")
@@ -103,6 +144,15 @@ impl RefLog {
         }
     }
 
+    /// Write a new [`RefLogEntry`] to the appropriate ref log.
+    ///
+    /// This method writes to the ref log for `HEAD`, and if the `branch_name` parameter is not
+    /// `None`, also writes the same entry to the ref log for the given branch.  If a ref log
+    /// for that branch does not exist, it is created.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if it encounters any error writing to the filesystem.
     pub fn write(
         &self,
         entry: &RefLogEntry,
@@ -130,6 +180,17 @@ impl RefLog {
         Ok(())
     }
 
+    /// Copy the content of a ref log file to `stdout`.
+    ///
+    /// This method will copy the ref log file for `branch_name`, or the ref log for
+    /// `HEAD` if the `branch_name` parameter is `None`.
+    ///
+    /// The branch given does not need to exist, as long as its ref log file exists.
+    ///
+    /// # Errors
+    ///
+    /// This method will return an error if it encounters any errors reading from
+    /// the filesystem, or if the branch given does not have a ref log file.
     pub fn dump(&self, branch_name: Option<&str>) -> Result<(), anyhow::Error> {
         let file_path = self.ref_log_file_path(branch_name);
         let mut file = OpenOptions::new()
@@ -140,6 +201,10 @@ impl RefLog {
         Ok(())
     }
 
+    /// Return `true` if a ref log file exists on disk for the given branch
+    /// (or for "`HEAD`"), and `false` if not.
+    ///
+    /// This method is infallible, and returns `false` if it encounters any filesystem errors.
     pub fn check_exists(&self, branch_name: &str) -> bool {
         let file_path = if branch_name == "HEAD" {
             self.ref_log_file_path(None)
@@ -149,6 +214,9 @@ impl RefLog {
         file_path.exists()
     }
 
+    /// Return a list of extant ref logs on disk.
+    ///
+    /// This method returns an error if it encounters any errors reading from the filesystem.
     pub fn list_ref_logs(&self) -> Result<Vec<String>, anyhow::Error> {
         let mut output = Vec::<String>::new();
         if self.base_path.join("HEAD").exists() {

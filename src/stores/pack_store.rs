@@ -1,3 +1,8 @@
+//! This module contains the parsing code for Git packfiles
+//!
+//! At present, this module only supports reading packfiles, and only supports packfiles with version 2 indexes,
+//! and that use SHA-1 object IDs.
+
 use anyhow::anyhow;
 use flate2::bufread::ZlibDecoder;
 use std::{
@@ -9,10 +14,11 @@ use std::{
 };
 
 use crate::{
-    objects::{ObjectKind, ObjectMetadata, RawObject},
+    objects::{GitObject, ObjectKind, ObjectMetadata, RawObject},
     stores::ObjectStore,
 };
 
+/// An object store which represents a packfile and its index.
 pub struct PackStore {
     _pack_name: String,
     primary_file: PathBuf,
@@ -22,6 +28,24 @@ pub struct PackStore {
 }
 
 impl PackStore {
+    /// Create a new [`PackStore`] representing a packfile's metadata.
+    ///
+    /// This function takes two parameters, the base path (normally `.git/objects/pack`) and the pack name,
+    /// which is the name of any of the files making up the entire pack, minus their extension.  For example, the
+    /// primary packfile is normally `<pack_name>.pack`, and its associated index file is `<pack_name>.idx`.  
+    /// By convention `<pack_name>` is `pack-<nnnnnnnn>` where the digits are the hexadecimal representation of
+    /// the pack's checksum, which also forms the trailer of the primary packfile; the function does not confirm this.
+    ///
+    /// This function returns an error if:
+    /// - the `base_path` is not a valid directory
+    /// - the primary packfile does not exist
+    /// - the index file does not exist
+    /// - the index file cannot be opened and read
+    /// - the primary packfile's length cannot be determined
+    ///
+    /// This function returns successfully if the packfile uses SHA-256 for object IDs.  However, as CVVC does not
+    /// yet support SHA-256, other functions and methods in this module will likely error or give incorrect results
+    /// when run against a SHA-256 packfile.
     pub fn new<P: AsRef<Path>>(base_path: P, pack_name: &str) -> Result<Self, anyhow::Error> {
         let base_path = base_path.as_ref();
         if !base_path.is_dir() {
@@ -47,6 +71,22 @@ impl PackStore {
         })
     }
 
+    /// Find all packs in a given directory.
+    ///
+    /// This function iterates over the contents of a directory, and finds all of the files whose names appear
+    /// to follow the packfile naming convention.  It then tries to load the metadata for each file stem it finds
+    /// by calling [`PackStore::new`] for each file stem.
+    ///
+    /// This function will return an error if calling [`PackStore::new`] on any apparent packfile returns an error,
+    /// regardless of whether or not other packfiles in the directory can be loaded successfully.  See the
+    /// documentation for [`PackStore::new`] for reasons why this may happen.
+    ///
+    /// This function will also return an error if it encounters any filesystem errors when trying to identify potential
+    /// packfiles.
+    ///
+    /// When searching for candidate packs, this function does not distinguish between packfiles that use SHA-1 and
+    /// those that use SHA-256.  However, because CVVC does not at present support SHA-256 repositories, attempting to
+    /// load SHA-256 packfiles is highly likely to cause runtime errors.
     pub fn find_packs<P: AsRef<Path>>(base_path: P) -> Result<Vec<Self>, anyhow::Error> {
         let base_path = base_path.as_ref();
         if !base_path.is_dir() {
@@ -449,14 +489,28 @@ impl PackStore {
 }
 
 impl ObjectStore for PackStore {
+    /// Attempt to create a new packfile.  As this is unsupported, this method always returns an error.
     fn create(&self) -> Result<(), anyhow::Error> {
         Err(anyhow!("pack creation not yet supported"))
     }
 
+    /// Confirm whether or not this packfile is writeable.  This method always returns false.
     fn _is_writeable(&self) -> bool {
         false
     }
 
+    /// Search the packfile for objects whose IDs begin with a given prefix.
+    ///
+    /// This method returns a [`Vec<String>`] of complete object IDs which begin with the given prefix.  This
+    /// can be a empty, if no such objects exist in this packfile.
+    ///
+    /// This method only searches the packfile index, and assumes that the index is valid.  It does not
+    /// confirm that the index is valid, that the index points correctly to the listed objects, or that the objects
+    /// can be successfully read from the packfile.
+    ///
+    /// This method will return an error if the index is not a version 2 index, or if any filesystem errors
+    /// occur whilst reading the index.  It also returns an error if the parameter is not a valid partial object ID,
+    /// or if it only consists of a single character.
     fn search_objects(&self, partial_object_id: &str) -> Result<Vec<String>, anyhow::Error> {
         let mut reader = self.open_index_file()?;
         if !Self::check_index_version(&mut reader)? {
@@ -466,16 +520,44 @@ impl ObjectStore for PackStore {
         Ok(found_objects.into_iter().map(|x| x.object_id).collect())
     }
 
+    /// Confirm whether or not the given object exists in the packfile.
+    ///
+    /// On success, this method determines whether or not an object with the given ID is present in the packfile index.
+    /// It assumes that the index is valid.  It does not confirm whether or not the index is valid, that the index
+    /// points correctly to the object, or that the object can be successfully read from the packfile.
+    ///
+    /// This method will return an error if the index is not a version 2 index, or if any filesystem errors occur whilst
+    /// reading the index.  It also returns an error if the parameter is not a valid partial object ID.  If the parameter
+    /// is a valid partial object ID longer than 1 character, it returns `Ok(false)`.
     fn has_object(&self, object_id: &str) -> Result<bool, anyhow::Error> {
         let mut reader = self.open_index_file()?;
         if !Self::check_index_version(&mut reader)? {
             return Err(anyhow!("pack index file format not recognised"));
         }
         let found_objects = self.search_index_objects(&mut reader, object_id)?;
-        Ok(!found_objects.is_empty())
+        Ok(found_objects.len() == 1)
     }
 
-    fn read_object(&self, object_id: &str) -> Result<Option<RawObject>, anyhow::Error> {
+    /// Read a [`RawObject`] from the packfile.
+    ///
+    /// This method reads a [`RawObject`] from the packfile, if it exists in the packfile.  If the given ID is a legal
+    /// partial object ID but is not the full object ID of an object in this packfile, the method returns `Ok(None)`.
+    ///
+    /// An error is returned if the object is present in the packfile, but is a "named delta" (also known as an
+    /// OBJ_REF_DELTA) object.  These objects are found in "thin packs", so called because they can consist solely
+    /// of deltafied objects and do not need to contain the deltafied objects' dependencies.  CVVC does not at present
+    /// support thin packs, which should normally only be encountered when transferring packs over the network
+    ///
+    /// An error is also returned if:
+    /// - the object ID is not a legal partial object ID longer than 1 character
+    /// - the packfile or pack index file cannot be read, or another filesystem error occurs
+    /// - the packfile fails basic format checks
+    /// - the index file fails basic format checks
+    /// - the index file is not a version 2 index
+    /// - the object's metadata cannot be successfully loaded from the packfile
+    /// - the object's packfile data cannot be successfully decompressed
+    /// - the object is a delta object and one of its ancestors cannot be loaded successfully from the packfile
+    fn read_raw_object(&self, object_id: &str) -> Result<Option<RawObject>, anyhow::Error> {
         let object_address = self.get_object_address(object_id)?;
         let Some(object_address) = object_address else {
             return Ok(None);
@@ -487,7 +569,7 @@ impl ObjectStore for PackStore {
         let (meta, data) = self.read_at_address(&mut pack_file, object_address)?;
         if meta.is_base_object() {
             let metadata = ObjectMetadata::new(ObjectKind::try_from(meta.kind)?, data.len());
-            Ok(Some(RawObject::from_headless_data(
+            Ok(Some(RawObject::from_headerless_data(
                 &data, object_id, metadata,
             )))
         } else if let PackedObjectType::OffsetDelta(offset) = meta.kind {
@@ -498,7 +580,7 @@ impl ObjectStore for PackStore {
                 ObjectKind::try_from(combined_meta.kind)?,
                 combined_meta.size as usize,
             );
-            Ok(Some(RawObject::from_headless_data(
+            Ok(Some(RawObject::from_headerless_data(
                 &combine_data(&base_data, &data),
                 object_id,
                 unpacked_metadata,
@@ -508,7 +590,15 @@ impl ObjectStore for PackStore {
         }
     }
 
+    /// Fails to write a [`RawObject`] to the packfile.  This method always returns an error, because packfiles are not
+    /// editable.
     fn write_raw_object(&self, _obj: &RawObject) -> Result<String, anyhow::Error> {
+        Err(anyhow!("writing to packs not implemented"))
+    }
+
+    /// Fails to write a [`GitObject`] to the packfile.  This method always returns an error, because packfiles are not
+    /// editable.
+    fn write_object(&self, _obj: &impl GitObject) -> Result<String, anyhow::Error> {
         Err(anyhow!("writing to packs not implemented"))
     }
 }
@@ -539,7 +629,7 @@ struct PackIndexObject {
 }
 
 #[derive(Clone)]
-pub enum PackedObjectType {
+enum PackedObjectType {
     Commit,
     Tree,
     Blob,
@@ -598,7 +688,7 @@ impl TryFrom<u8> for PackedObjectTypeOnly {
     }
 }
 
-pub struct PackedObjectMetadata {
+struct PackedObjectMetadata {
     size: u64,
     data_start_address: u64,
     pub kind: PackedObjectType,

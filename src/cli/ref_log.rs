@@ -1,15 +1,18 @@
 use crate::helpers::find_repo_cwd;
 
+/// Entry point for the `cv reflog show` command.
 pub fn show(branch: Option<&str>) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     repo.show_ref_log(branch)
 }
 
+/// Entry point for the `cv reflog exists` command.
 pub fn exists(branch: &str) -> Result<bool, anyhow::Error> {
     let repo = find_repo_cwd()?;
     repo.check_ref_log_exists(branch)
 }
 
+/// Entry point for the `cv reflog list` command.
 pub fn list() -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     let ref_logs = repo.list_ref_logs()?;

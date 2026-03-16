@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use std::{
     io::{stdout, Write},
     path::PathBuf,
+    str::FromStr,
 };
 
 use crate::{
@@ -10,17 +11,20 @@ use crate::{
     repo::Repository,
 };
 
+/// Entry point for the `cv rev-parse` command.
 pub fn rev_parse(obj_name: &str) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     println!("{}", &repo.find_object(obj_name, None, true)?);
     Ok(())
 }
 
+/// Entry point for the `cv cat-file` command.
 pub fn cat_file(obj_type: &str, obj_name: &str) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     cat_file_from_repo(repo, obj_type, obj_name)
 }
 
+/// Entry point for the `cv ls-tree` command.
 pub fn list_tree(recursive: bool, obj_name: &str) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     list_tree_recursive(recursive, &repo, obj_name, None)
@@ -50,6 +54,7 @@ fn cat_file_from_repo(
     Ok(())
 }
 
+/// Entry point for the `cv object-hash` command.
 pub fn object_hash(write: bool, filename: &str) -> Result<(), anyhow::Error> {
     let raw_object = RawObject::from_git_object(&Blob::new_from_path(filename)?);
     println!("{}", raw_object.object_id());
@@ -91,15 +96,20 @@ fn list_tree_recursive(
         };
         if !(recursive && item_type == "tree") {
             let path_str = match prefix {
-                Some(prefix) => prefix.join(&item.path).to_string_lossy().to_string(),
-                None => item.path.to_string_lossy().to_string(),
+                Some(prefix) => prefix.join(&item.name).to_string_lossy().to_string(),
+                None => item.name.to_string(),
             };
             println!(
                 "{:06o} {} {}\t{}",
                 item.mode, item_type, item.object_id, path_str
             );
         } else {
-            list_tree_recursive(recursive, repo, &item.object_id, Some(&item.path))?;
+            list_tree_recursive(
+                recursive,
+                repo,
+                &item.object_id,
+                Some(&PathBuf::from_str(&item.name)?),
+            )?;
         }
     }
     Ok(())

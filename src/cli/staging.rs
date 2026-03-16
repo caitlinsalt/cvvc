@@ -7,12 +7,13 @@ use crate::{
     helpers::{
         find_repo_cwd,
         fs::{path_translate, path_translate_rev, walk_fs_pruned},
-        shorten_message,
+        shorten_and_prefix_message,
     },
     objects::{Blob, Commit, RawObject},
     repo::Repository,
 };
 
+/// Entry point for the `cv ls-files` command.
 pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     let index = repo.read_index()?;
@@ -41,6 +42,7 @@ pub fn list_files(verbose: bool) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+/// Entry point for the `cv check-ignore` command.
 pub fn check_ignore(paths: &[String]) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     let ignore_rules = repo.read_ignore_info()?;
@@ -52,6 +54,7 @@ pub fn check_ignore(paths: &[String]) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+/// Entry point for the `cv rm` command.
 pub fn remove_files(
     paths: &[String],
     index_only: bool,
@@ -74,12 +77,14 @@ pub fn remove_files(
     Ok(())
 }
 
+/// Entry point for the `cv add` command.
 pub fn add_files(paths: &[String]) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     repo.add_paths_to_index_and_write(paths)?;
     Ok(())
 }
 
+/// Entry point for the `cv status` command.
 pub fn status() -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     status_branch(&repo)?;
@@ -96,12 +101,14 @@ pub fn status() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+/// Entry point for the `cv write-tree` command.
 pub fn store_index_as_tree(no_checks: bool) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     println!("{}", store_index_as_tree_repo(&repo, no_checks)?);
     Ok(())
 }
 
+/// Entry point for the `cv commit-tree` command.
 pub fn create_commit_for_tree(
     tree_id: &str,
     parents: &[String],
@@ -127,6 +134,7 @@ pub fn create_commit_for_tree(
     Ok(())
 }
 
+/// Entry point for the `cv commit` command.
 pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     let start_commit = repo.current_commit()?;
@@ -156,7 +164,7 @@ pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(),
         &commit_id,
         &config.committer(),
         &timestamp,
-        &shorten_message("commit", message),
+        &shorten_and_prefix_message("commit", message),
         current_branch_name.as_deref(),
     )
 }

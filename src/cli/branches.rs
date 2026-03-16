@@ -5,16 +5,19 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use std::{fs, path::Path, time::SystemTime};
 
+/// Entry point for the `cv checkout` command
 pub fn checkout(target_name: &str, dest: &str, config: &GlobalConfig) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     checkout_from_repo(&repo, target_name, dest, config)
 }
 
+/// Entry point for the `cv branch <new-branch>` and `cv checkout -b <new-branch>` commands
 pub fn new_branch(branch_name: &str, checkout: bool) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     new_branch_in_repo(&repo, branch_name, checkout)
 }
 
+/// Entry point for the `cv branch --list` command.
 pub fn list_branches() -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     list_branches_in_repo(&repo)
@@ -24,7 +27,11 @@ fn list_branches_in_repo(repo: &Repository) -> Result<(), anyhow::Error> {
     let branches = repo.branches()?;
     let cb = repo.current_branch()?;
     for branch in branches {
-        let cb_flag = if cb.as_ref().map(|b| &b.name) == Some(&branch.name) { "*" } else { " " };
+        let cb_flag = if cb.as_ref().map(|b| &b.name) == Some(&branch.name) {
+            "*"
+        } else {
+            " "
+        };
         println!("{cb_flag} {}", branch.name);
     }
     Ok(())
@@ -66,14 +73,8 @@ fn checkout_from_repo(
         return Err(anyhow!("Cannot checkout object {target_id} (not a commit)"));
     };
 
-    let tree_entry = commit.map().get("tree");
-    let Some(tree_entry) = tree_entry else {
-        return Err(anyhow!("Commit {} is missing a tree", target_id));
-    };
-    let Some(tree_entry) = tree_entry.first() else {
-        return Err(anyhow!("Commit {} has an empty tree entry", target_id));
-    };
-    let Some(tree_obj) = repo.read_object(tree_entry)? else {
+    let tree_entry = commit.tree()?;
+    let Some(tree_obj) = repo.read_object(&tree_entry)? else {
         return Err(anyhow!(
             "Commit {} points to a non-existent tree",
             target_id
@@ -109,7 +110,8 @@ fn checkout_from_repo(
         repo.update_head_detached(&target_id)?;
         println!("HEAD is detached at {target_id}");
     }
-    let ref_log_source = prev_branch.map(|b| b.name)
+    let ref_log_source = prev_branch
+        .map(|b| b.name)
         .or_else(|| prev_commit_id.clone())
         .unwrap_or_else(|| "00000000000000000000".to_string());
     let ref_log_message = format!("checkout: moving from {ref_log_source} to {target_id}");

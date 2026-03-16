@@ -4,16 +4,19 @@ use indexmap::IndexMap;
 
 use crate::{helpers::find_repo_cwd, objects::Tag, repo::Repository};
 
+/// Entry point for the `cv show-ref` coommand
 pub fn show_refs() -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     show_refs_in_repo(&repo)
 }
 
+/// Entry point for the `cv tag` command (with no arguments).
 pub fn show_tags() -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     show_tags_in_repo(&repo)
 }
 
+/// Entry point for the `cv tag <new-tag>` command.
 pub fn create_tag(name: &str, target: &str, chunky: bool) -> Result<(), anyhow::Error> {
     let repo = find_repo_cwd()?;
     let absolute_target = repo.find_object(target, None, true)?;
