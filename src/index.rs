@@ -104,6 +104,7 @@ impl Display for IndexEntryPermissions {
 /// different meaning to other platforms.  On other operating systems, these fields also may not be
 /// populated, depending on the type of filesystem the repository is stored on.  This is unlikely to cause
 /// users issues as indexes should not be shared across repositories even if they are clones of each other.
+#[derive(Debug)]
 pub struct IndexEntry {
     /// On Windows, the file creation time.  On other operating systems, the file metadata change time, if supported.
     pub ctime: DateTime<Utc>,
@@ -149,11 +150,16 @@ pub struct IndexEntry {
 }
 
 impl IndexEntry {
-    /// The length of this [`IndexEntry`] when serialised, including trailing padding which rounds the size up
+    /// The length of this [`IndexEntry`] when serialised, including trailing padding (if needed) which rounds the size up
     /// to a multiple of 8 bytes.
     pub fn byte_length(&self) -> usize {
+        let raw_length = self.object_name.len() + 63;
         // Round up to 8-byte boundary
-        let blocks = (self.object_name.len() + 63) / 8 + 1;
+        let blocks = if raw_length % 8 != 0 {
+            (self.object_name.len() + 63) / 8 + 1
+        } else {
+            raw_length / 8
+        };
         blocks * 8
     }
 
