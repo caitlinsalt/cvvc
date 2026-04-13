@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, TimeZone};
+use flate2::write;
 use indexmap::IndexMap;
 use ini::Ini;
 use std::{
@@ -240,9 +241,8 @@ impl Repository {
         repo.dir(&["refs", "tags"].iter().collect::<PathBuf>())?;
         repo.branch_store.create()?;
 
-        fs::write(repo.file("description")?, "Unnamed repository\n")?;
-
-        fs::write(repo.file("HEAD")?, "ref: refs/heads/main\n")?;
+        write_single_line(repo.file("description")?, "Unnamed repository")?;
+        write_single_line(repo.file("HEAD")?, "ref: refs/heads/main")?;
 
         repo.config.write_to_file(repo.file("config")?)?;
 
