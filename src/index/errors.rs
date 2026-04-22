@@ -6,7 +6,7 @@ use std::{
 };
 
 /// The reasons that an index entry may be invalid.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InvalidIndexEntryKind {
     /// The entry was too short to be properly parsed.
     TooShort,

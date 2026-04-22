@@ -26,8 +26,8 @@ use crate::{
     ignore::IgnoreInfo,
     index::{Index, IndexEntry},
     objects::{
-        errors::FindObjectError, Blob, GitObject, ObjectKind,
-        RawObject, StoredObject, Tree, TreeNode,
+        errors::FindObjectError, Blob, GitObject, ObjectKind, RawObject, StoredObject, Tree,
+        TreeNode,
     },
     ref_log::{RefLog, RefLogEntry},
     stores::{
@@ -406,7 +406,7 @@ impl Repository {
                 return Err(anyhow::Error::from(FindObjectError::none()));
             };
             if obj.metadata().kind == kind {
-                return Ok(current_target)
+                return Ok(current_target);
             }
             if !follow_tags {
                 return Err(anyhow::Error::from(FindObjectError::none()));

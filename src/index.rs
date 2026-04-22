@@ -13,7 +13,7 @@ use crate::helpers::{
 pub mod errors;
 
 /// The file type of an index entry.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum IndexEntryType {
     /// Regular file
     File,
@@ -58,7 +58,7 @@ impl Display for IndexEntryType {
 }
 
 /// The permissions of an index entry
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum IndexEntryPermissions {
     Executable,
     NonExecutable,
@@ -522,5 +522,1186 @@ impl Index {
     pub fn sort(&mut self) {
         self.entries.sort();
         self.version = 2;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_entry_type_from_byte_file() {
+        let test_input: u8 = 8;
+
+        let result = IndexEntryType::from_byte(test_input);
+
+        assert_eq!(Some(IndexEntryType::File), result);
+    }
+
+    #[test]
+    fn index_entry_type_from_byte_symlink() {
+        let test_input: u8 = 10;
+
+        let result = IndexEntryType::from_byte(test_input);
+
+        assert_eq!(Some(IndexEntryType::Symlink), result);
+    }
+
+    #[test]
+    fn index_entry_type_from_byte_gitlink() {
+        let test_input: u8 = 14;
+
+        let result = IndexEntryType::from_byte(test_input);
+
+        assert_eq!(Some(IndexEntryType::Gitlink), result);
+    }
+
+    #[test]
+    fn index_entry_type_from_byte_invalid() {
+        let test_input: u8 = 242;
+
+        let result = IndexEntryType::from_byte(test_input);
+
+        assert_eq!(None, result);
+    }
+
+    #[test]
+    fn index_entry_type_to_byte_file() {
+        let test_input = IndexEntryType::File;
+
+        let result = test_input.to_byte();
+
+        assert_eq!(8, result);
+    }
+
+    #[test]
+    fn index_entry_type_to_byte_symlink() {
+        let test_input = IndexEntryType::Symlink;
+
+        let result = test_input.to_byte();
+
+        assert_eq!(10, result);
+    }
+
+    #[test]
+    fn index_entry_type_to_byte_gitlink() {
+        let test_input = IndexEntryType::Gitlink;
+
+        let result = test_input.to_byte();
+
+        assert_eq!(14, result);
+    }
+
+    #[test]
+    fn index_entry_type_fmt_file() {
+        let test_input = IndexEntryType::File;
+
+        let result = test_input.to_string();
+
+        assert_eq!("regular file", result);
+    }
+
+    #[test]
+    fn index_entry_type_fmt_symlink() {
+        let test_input = IndexEntryType::Symlink;
+
+        let result = test_input.to_string();
+
+        assert_eq!("symbolic link", result);
+    }
+
+    #[test]
+    fn index_entry_type_fmt_gitlink() {
+        let test_input = IndexEntryType::Gitlink;
+
+        let result = test_input.to_string();
+
+        assert_eq!("git link", result);
+    }
+
+    #[test]
+    fn index_entry_permissions_from_u16_non_executable() {
+        let test_input: u16 = 0o644;
+
+        let result = IndexEntryPermissions::from_u16(test_input);
+
+        assert_eq!(Some(IndexEntryPermissions::NonExecutable), result);
+    }
+
+    #[test]
+    fn index_entry_permissions_from_u16_executable() {
+        let test_input: u16 = 0o755;
+
+        let result = IndexEntryPermissions::from_u16(test_input);
+
+        assert_eq!(Some(IndexEntryPermissions::Executable), result);
+    }
+
+    #[test]
+    fn index_entry_permissions_from_u16_link() {
+        let test_input: u16 = 0;
+
+        let result = IndexEntryPermissions::from_u16(test_input);
+
+        assert_eq!(Some(IndexEntryPermissions::Link), result);
+    }
+
+    #[test]
+    fn index_entry_permissions_from_u16_invalid_value() {
+        let test_input: u16 = 0o237;
+
+        let result = IndexEntryPermissions::from_u16(test_input);
+
+        assert_eq!(None, result);
+    }
+
+    #[test]
+    fn index_entry_permissions_to_u16_non_executable() {
+        let test_input = IndexEntryPermissions::NonExecutable;
+
+        let result = test_input.to_u16();
+
+        assert_eq!(0o644, result);
+    }
+
+    #[test]
+    fn index_entry_permissions_to_u16_executable() {
+        let test_input = IndexEntryPermissions::Executable;
+
+        let result = test_input.to_u16();
+
+        assert_eq!(0o755, result);
+    }
+
+    #[test]
+    fn index_entry_permissions_to_u16_link() {
+        let test_input = IndexEntryPermissions::Link;
+
+        let result = test_input.to_u16();
+
+        assert_eq!(0, result);
+    }
+
+    #[test]
+    fn index_entry_permissions_fmt_non_executable() {
+        let test_input = IndexEntryPermissions::NonExecutable;
+
+        let result = test_input.to_string();
+
+        assert_eq!("0644", result);
+    }
+
+    #[test]
+    fn index_entry_permissions_fmt_executable() {
+        let test_input = IndexEntryPermissions::Executable;
+
+        let result = test_input.to_string();
+
+        assert_eq!("0755", result);
+    }
+
+    #[test]
+    fn index_entry_permissions_fmt_link() {
+        let test_input = IndexEntryPermissions::Link;
+
+        let result = test_input.to_string();
+
+        assert_eq!("0000", result);
+    }
+
+    #[test]
+    fn index_entry_byte_length_rounds_up() {
+        let test_input = IndexEntry {
+            ctime: Utc::now(),
+            mtime: Utc::now(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 71000,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "00000000000000000000".to_string(),
+            object_name: "an_ordinary_file_name".to_string(),
+        };
+        let expected_result = 88usize;
+
+        let result = test_input.byte_length();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_byte_length_does_not_round_up_on_block_boundary() {
+        let test_input = IndexEntry {
+            ctime: Utc::now(),
+            mtime: Utc::now(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 71000,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "00000000000000000000".to_string(),
+            object_name: "a__file__with_name_ending_on_the__block__boundary".to_string(),
+        };
+        let expected_result = 112usize;
+
+        let result = test_input.byte_length();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_returns_ok() {
+        // This is a genuine index entry from this project's own index, tweaked so that the fields
+        // that are zero on Windows are populated with the same values as the byte_length() tests above
+
+        // This input is used for all the from_bytes() tests expected to return Ok(entry), and is tweaked
+        // for tests expected to return Error(...)
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_ctime() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_ctime = DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+            .unwrap()
+            .to_utc();
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_ctime, result.ctime);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_mtime() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_mtime = DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+            .unwrap()
+            .to_utc();
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_mtime, result.mtime);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_dev() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_dev = 4472;
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_dev, result.dev);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_ino() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_ino = 4468;
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_ino, result.ino);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_mode_type() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(IndexEntryType::File, result.mode_type);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_mode_perms() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(IndexEntryType::File, result.mode_type);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_uid() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_uid = 80105;
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_uid, result.uid);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_gid() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_gid = 2857;
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_gid, result.gid);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_fsize() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_fsize = 3372;
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_fsize, result.fsize);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_object_id() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_id = "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4";
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_id, result.object_id);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_flag_assume_valid_false() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert!(!result.flag_assume_valid);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_flag_assume_valid_true() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x80, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert!(result.flag_assume_valid);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_flag_stage_0() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(0, result.flag_stage);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_flag_stage_3() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(3, result.flag_stage);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_sets_name() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let expected_name = "src/index/errors.rs";
+
+        let result = IndexEntry::from_bytes(&test_input);
+
+        let Ok(result) = result else {
+            panic!();
+        };
+        assert_eq!(expected_name, result.object_name);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_insufficient_data_to_hold_all_fields() {
+        let test_input = [0x69u8, 0xae, 0xe0, 0x4];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+
+        assert_eq!(InvalidIndexEntryKind::TooShort, result.error_kind);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_invalid_ctime() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x3, 0x68, 0x9a, 0xca, 0xff, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::UnparseableTimestamp(_x, _y) = result.error_kind else {
+            panic!();
+        };
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_invalid_mtime() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x64, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::UnparseableTimestamp(_x, _y) = result.error_kind else {
+            panic!();
+        };
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_invalid_mode_type() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x11, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::UnexpectedMode(x) = result.error_kind else {
+            panic!();
+        };
+        assert_eq!(1, x);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_invalid_mode_permissions() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xaf, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::UnexpectedPermissions(x) = result.error_kind else {
+            panic!();
+        };
+        assert_eq!(0o657, x);
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_data_is_too_short_for_declared_name_length() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::TooShort = result.error_kind else {
+            panic!();
+        };
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_name_is_too_short() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0, 0x69, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4,
+            0x68,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::NameNotNullTerminated = result.error_kind else {
+            panic!();
+        };
+    }
+
+    #[test]
+    fn index_entry_from_bytes_error_if_name_is_too_long() {
+        let test_input = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0x30, 0x13, 0x73,
+            0x72, 0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72,
+            0x73, 0x2e, 0x72, 0x73, 0x73, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let result = IndexEntry::from_bytes(&test_input);
+        let result = result.unwrap_err();
+        let InvalidIndexEntryKind::NameNotNullTerminated = result.error_kind else {
+            panic!();
+        };
+    }
+
+    #[test]
+    fn index_entry_serialise() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let expected_result = [
+            0x69u8, 0xae, 0xe0, 0x4, 0xc, 0xc8, 0x34, 0x60, 0x69, 0xb8, 0x42, 0x9e, 0x4, 0x68,
+            0x2a, 0xf0, 0, 0, 0x11, 0x78, 0, 0, 0x11, 0x74, 0, 0, 0x81, 0xa4, 0, 0x1, 0x38, 0xe9,
+            0, 0, 0x0b, 0x29, 0, 0, 0xd, 0x2c, 0xf6, 0xd9, 0xd2, 0x6f, 0x9d, 0x58, 0xb5, 0x8c, 0xd,
+            0x7b, 0x1c, 0x69, 0xf6, 0xb2, 0x46, 0xcf, 0xca, 0x46, 0x40, 0xc4, 0, 0x13, 0x73, 0x72,
+            0x63, 0x2f, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2f, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x73,
+            0x2e, 0x72, 0x73, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let mut results = Vec::<u8>::new();
+
+        test_input.serialise(&mut results);
+
+        assert_eq!(expected_result, *results);
+    }
+
+    #[test]
+    fn index_entry_object_directory_name_if_non_root() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let expected_result = "src/index";
+
+        let result = test_input.object_directory_name();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_object_directory_name_if_root() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "errors.rs".to_string(),
+        };
+        let expected_result = "";
+
+        let result = test_input.object_directory_name();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_object_file_name_if_non_root() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let expected_result = "errors.rs";
+
+        let result = test_input.object_file_name();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_object_file_name_if_root() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "errors.rs".to_string(),
+        };
+        let expected_result = "errors.rs";
+
+        let result = test_input.object_file_name();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_mode_file_non_executable() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "errors.rs".to_string(),
+        };
+        let expected_result = 0o100644;
+
+        let result = test_input.mode();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_mode_file_executable() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::Executable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "errors.rs".to_string(),
+        };
+        let expected_result = 0o100755;
+
+        let result = test_input.mode();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_mode_file_symlink() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::Symlink,
+            mode_perms: IndexEntryPermissions::Link,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "errors.rs".to_string(),
+        };
+        let expected_result = 0o120000;
+
+        let result = test_input.mode();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_mode_file_gitlink() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::Gitlink,
+            mode_perms: IndexEntryPermissions::Link,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "errors.rs".to_string(),
+        };
+        let expected_result = 0o160000;
+
+        let result = test_input.mode();
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn index_entry_cmp_names_differ_at_root() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let other = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "vrc/index/errors.rs".to_string(),
+        };
+
+        let result = test_input.cmp(&other);
+
+        assert_eq!(Ordering::Less, result);
+    }
+
+    #[test]
+    fn index_entry_cmp_names_differ_at_file() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let other = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/arrows.rs".to_string(),
+        };
+
+        let result = test_input.cmp(&other);
+
+        assert_eq!(Ordering::Greater, result);
+    }
+
+    #[test]
+    fn index_entry_cmp_same_name_different_stage() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let other = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 2,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+
+        let result = test_input.cmp(&other);
+
+        assert_eq!(Ordering::Less, result);
+    }
+
+    #[test]
+    fn index_entry_cmp_same_name_same_stage_other_fields_differ() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-10T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-10T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 60105,
+            ino: 60013,
+            mode_type: IndexEntryType::Symlink,
+            mode_perms: IndexEntryPermissions::Link,
+            uid: 92220,
+            gid: 1450,
+            fsize: 819,
+            flag_assume_valid: true,
+            flag_stage: 0,
+            object_id: "f6d9d26f9c58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let other = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+
+        let result = test_input.cmp(&other);
+
+        assert_eq!(Ordering::Equal, result);
+    }
+
+    #[test]
+    fn index_entry_eq_same_name_same_stage_other_fields_differ() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-10T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-10T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 60105,
+            ino: 60013,
+            mode_type: IndexEntryType::Symlink,
+            mode_perms: IndexEntryPermissions::Link,
+            uid: 92220,
+            gid: 1450,
+            fsize: 819,
+            flag_assume_valid: true,
+            flag_stage: 0,
+            object_id: "f6d9d26f9c58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let other = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+
+        let result = test_input == other;
+
+        assert!(result);
     }
 }
