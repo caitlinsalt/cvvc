@@ -157,6 +157,9 @@ enum Commands {
         /// Create a chunky tag
         #[arg(short = 'a')]
         chunky: bool,
+        /// The message to add to a chunky tag
+        #[arg(long, short = 'm')]
+        message: Option<String>,
         /// The tag name
         #[arg(value_name = "NAME")]
         name: Option<String>,
@@ -260,10 +263,11 @@ fn parse_dispatch() -> ExitCode {
         Commands::Status => staging::status(),
         Commands::Tag {
             chunky,
+            message,
             name,
             target,
         } => match name {
-            Some(tag_name) => refs::create_tag(&tag_name, &target, chunky),
+            Some(tag_name) => refs::create_tag(&config, &tag_name, &target, chunky, message.as_deref()),
             None => refs::show_tags(),
         },
         Commands::WriteTree { no_checks } => staging::store_index_as_tree(no_checks),

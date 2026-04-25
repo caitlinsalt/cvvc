@@ -1,7 +1,7 @@
 use anyhow::anyhow;
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, str::FromStr, time::SystemTime};
 
-use chrono::{DateTime, TimeZone};
+use chrono::{DateTime, TimeZone, Utc};
 
 use crate::{helpers::fs::index_path_parent, repo::Repository};
 
@@ -70,9 +70,9 @@ pub fn add_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, k: &str, v: T) {
 /// #Examples
 ///
 /// ```
-/// use cvvc::helpers::add_parent_dirs_to_map_of_vecs;
-///
-/// let mut map = std::collections::HashMap::<String, Vec<u8>>::new();
+/// # use cvvc::helpers::add_parent_dirs_to_map_of_vecs;
+/// # use std::collections::HashMap;
+/// let mut map = HashMap::<String, Vec<u8>>::new();
 /// add_parent_dirs_to_map_of_vecs(&mut map, "one/two/three");
 /// assert!(map.contains_key("one/two/three"));
 /// assert!(map.contains_key("one/two"));
@@ -129,4 +129,29 @@ pub fn shorten_and_prefix_message(prefix: &str, message: &str) -> String {
         None => "",
     };
     format!("{prefix}: {message_start}")
+}
+
+/// Converts a `&str` to an owned string, appending a `\n` character if the string does not already end with one.
+/// 
+/// ```
+/// # use cvvc::helpers::append_newline_if_necessary;
+/// let str1 = "test";
+/// let output = append_newline_if_necessary(str1);
+/// assert_eq!("test\n", output);
+/// 
+/// let str2 = "test\n";
+/// let output = append_newline_if_necessary(str2);
+/// assert_eq!("test\n", output);
+/// ```
+pub fn append_newline_if_necessary(s: &str) -> String {
+    if s.ends_with("\n") {
+        String::from_str(s).unwrap()
+    } else {
+        String::from_str(s).unwrap() + "\n"
+    }
+}
+
+/// Gets the current UTC date and time, as a [`DateTime<Utc>`].
+pub fn now() -> DateTime<Utc> {
+    DateTime::<Utc>::from(SystemTime::now())
 }
