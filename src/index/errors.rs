@@ -6,7 +6,7 @@ use std::{
 };
 
 /// The reasons that an index entry may be invalid.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InvalidIndexEntryKind {
     /// The entry was too short to be properly parsed.
     TooShort,
@@ -25,7 +25,7 @@ pub enum InvalidIndexEntryKind {
 }
 
 /// An error which occurs when the index parser cannot parse an individual index entry.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct InvalidIndexEntryError {
     /// The reason the index entry could not be parsed.
     pub error_kind: InvalidIndexEntryKind,
@@ -54,7 +54,7 @@ impl Display for InvalidIndexEntryError {
 impl Error for InvalidIndexEntryError {}
 
 /// The reasons that an entire index may be invalid or unparseable.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InvalidIndexKind {
     /// The index was too short to be properly parsed.  This implies the parser ran out of data before reaching the
     /// first index entry.  If the parser has beg

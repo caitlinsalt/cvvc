@@ -71,7 +71,7 @@ pub fn add_to_map_of_vecs<T>(map: &mut HashMap<String, Vec<T>>, k: &str, v: T) {
 ///
 /// ```
 /// use cvvc::helpers::add_parent_dirs_to_map_of_vecs;
-/// 
+///
 /// let mut map = std::collections::HashMap::<String, Vec<u8>>::new();
 /// add_parent_dirs_to_map_of_vecs(&mut map, "one/two/three");
 /// assert!(map.contains_key("one/two/three"));
