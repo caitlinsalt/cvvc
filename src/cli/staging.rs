@@ -5,9 +5,7 @@ use std::{fmt::Display, fs, path::Path, time::SystemTime};
 use crate::{
     config::GlobalConfig,
     helpers::{
-        find_repo_cwd,
-        fs::{path_translate, path_translate_rev, walk_fs_pruned},
-        shorten_and_prefix_message,
+        self, find_repo_cwd, fs::{path_translate, path_translate_rev, walk_fs_pruned}, shorten_and_prefix_message
     },
     objects::{Blob, Commit, RawObject},
     repo::Repository,
@@ -140,7 +138,7 @@ pub fn full_commit(config: &GlobalConfig, message: Option<String>) -> Result<(),
     let start_commit = repo.current_commit()?;
     let tree_id = store_index_as_tree_repo(&repo, false)?;
     let parent_id = repo.current_commit()?;
-    let timestamp = DateTime::<Utc>::from(SystemTime::now());
+    let timestamp = helpers::now();
     let message = message
         .as_deref()
         .unwrap_or("User forgot to enter commit message");
