@@ -380,6 +380,7 @@ impl PartialEq for IndexEntry {
 impl Eq for IndexEntry {}
 
 /// The in-memory representation of an entire index.
+#[derive(Debug)]
 pub struct Index {
     /// The index version number.  At present, CVVC only supports v2 indexes.
     pub version: u32,
@@ -1691,5 +1692,106 @@ mod tests {
         let result = test_input == other;
 
         assert!(result);
+    }
+
+    #[test]
+    fn index_entry_eq_names_differ() {
+        let test_input = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/errors.rs".to_string(),
+        };
+        let other = IndexEntry {
+            ctime: DateTime::parse_from_rfc3339("2026-03-09T14:58:12.214447200Z")
+                .unwrap()
+                .to_utc(),
+            mtime: DateTime::parse_from_rfc3339("2026-03-16T17:49:18.073935600Z")
+                .unwrap()
+                .to_utc(),
+            dev: 4472,
+            ino: 4468,
+            mode_type: IndexEntryType::File,
+            mode_perms: IndexEntryPermissions::NonExecutable,
+            uid: 80105,
+            gid: 2857,
+            fsize: 3372,
+            flag_assume_valid: false,
+            flag_stage: 0,
+            object_id: "f6d9d26f9d58b58c0d7b1c69f6b246cfca4640c4".to_string(),
+            object_name: "src/index/arrows.rs".to_string(),
+        };
+
+        let result = test_input == other;
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn index_new_version() {
+        let expected_result = 2;
+        
+        let test_result = Index::new();
+
+        assert_eq!(expected_result, test_result.version);
+    }
+
+    #[test]
+    fn index_new_entries_empty() {
+        let expected_result = 0;
+
+        let test_result = Index::new().entries.len();
+
+        assert_eq!(expected_result, test_result);
+    }
+
+    #[test]
+    fn index_from_bytes_loads_empty_index() {
+        let test_input = [0x44u8, 0x49, 0x52, 0x43, 0, 0, 0, 2, 0, 0, 0, 0];
+
+        let test_result = Index::from_bytes(&test_input).unwrap();
+
+        assert_eq!(2, test_result.version);
+        assert_eq!(0, test_result.entries.len());
+    }
+
+    #[test]
+    fn index_from_bytes_short_data() {
+        let test_input = [0x44u8, 0x49, 0x52, 0x43, 0, 0, 0, 2, 0, 0, 0];
+
+        let test_result = Index::from_bytes(&test_input).unwrap_err();
+
+        assert_eq!(InvalidIndexKind::TooShort, test_result.error_kind);
+    }
+
+    #[test]
+    fn index_from_bytes_wrong_magic() {
+        let test_input = [0x44u8, 0x49, 0x43, 0x52, 0, 0, 0, 2, 0, 0, 0, 0];
+
+        let test_result = Index::from_bytes(&test_input).unwrap_err();
+
+        assert_eq!(InvalidIndexKind::MissingMagic, test_result.error_kind);
+    }
+
+    #[test]
+    fn index_from_bytes_wrong_version() {
+        let test_input = [0x44u8, 0x49, 0x52, 0x43, 0, 0, 0, 5, 0, 0, 0, 0];
+
+        let test_result = Index::from_bytes(&test_input).unwrap_err();
+
+        assert_eq!(InvalidIndexKind::UnsupportedVersion(5), test_result.error_kind);
     }
 }
