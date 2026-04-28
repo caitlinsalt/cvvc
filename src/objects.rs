@@ -5,7 +5,9 @@ use sha1::{Digest, Sha1};
 use std::{cmp::Ordering, fmt::Display, fs, io::Read, path::Path};
 
 use crate::{
-    helpers::{self, timestamped_name}, index::IndexEntry, objects::errors::InvalidObjectIdError,
+    helpers::{self, timestamped_name},
+    index::IndexEntry,
+    objects::errors::InvalidObjectIdError,
     repo::Repository,
 };
 
@@ -465,7 +467,17 @@ pub struct Tag {
 
 impl Tag {
     /// Create a repository tag object, with a default tagging message.
-    pub fn create<Tz>(target: &str, name: &str, message: Option<&str>, committer: &str, timestamp: &DateTime<Tz>) -> Self where Tz: TimeZone, Tz::Offset: Display {
+    pub fn create<Tz>(
+        target: &str,
+        name: &str,
+        message: Option<&str>,
+        committer: &str,
+        timestamp: &DateTime<Tz>,
+    ) -> Self
+    where
+        Tz: TimeZone,
+        Tz::Offset: Display,
+    {
         let message = String::from(message.unwrap_or("CV: The user forgot to enter the message"));
         let mut map = IndexMap::<String, Vec<String>>::new();
         map.insert(String::from("object"), vec![target.to_string()]);
@@ -818,7 +830,12 @@ fn kvlm_serialise(map: &IndexMap<String, Vec<String>>, message: &str, buf: &mut 
         }
     }
     buf.push(0x0a);
-    buf.append(helpers::append_newline_if_necessary(message).as_bytes().to_vec().as_mut());
+    buf.append(
+        helpers::append_newline_if_necessary(message)
+            .as_bytes()
+            .to_vec()
+            .as_mut(),
+    );
 }
 
 // Find the first index in a slice of a particular value, where it's not followed immediately by another specific value.
