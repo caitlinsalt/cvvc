@@ -5,11 +5,7 @@
 
 use anyhow::anyhow;
 use std::{
-    cmp::Ordering,
-    collections::HashSet,
-    fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    cmp::Ordering, collections::HashSet, fs::{self, File, OpenOptions}, io::{BufReader, Read, Seek, SeekFrom}, path::{Path, PathBuf}
 };
 
 use crate::{
@@ -49,6 +45,7 @@ impl PackStore {
     /// yet support SHA-256, other functions and methods in this module will likely error or give incorrect results
     /// when run against a SHA-256 packfile.
     pub fn new<P: AsRef<Path>>(base_path: P, pack_name: &str) -> Result<Self, anyhow::Error> {
+        println!("DEBUG: loading pack {}", pack_name);
         let base_path = base_path.as_ref();
         if !base_path.is_dir() {
             return Err(anyhow!("base path is not a directory"));
@@ -456,11 +453,12 @@ impl ObjectStore for PackStore {
         if !helpers::check_pack_version(&mut pack_file, Some(self.item_count))? {
             return Err(anyhow!("pack file format not recognised"));
         }
-        Ok(Some(helpers::read_raw_object_at_address(
+        let (raw_object, _) = helpers::read_raw_object_at_address(
             &mut pack_file,
             object_address,
             self.primary_file_len,
-        )?))
+        )?;
+        Ok(Some(raw_object))
     }
 
     /// Fails to write a [`RawObject`] to the packfile.  This method always returns an error, because packfiles are not
@@ -562,9 +560,10 @@ impl TryFrom<u8> for PackedObjectTypeOnly {
 }
 
 struct PackedObjectMetadata {
-    size: u64,
+    unpacked_size: u64,
     data_start_address: u64,
     pub kind: PackedObjectType,
+    packed_size: Option<u64>,
 }
 
 impl PackedObjectMetadata {
@@ -590,9 +589,10 @@ impl PackedObjectMetadata {
             },
         };
         Ok(PackedObjectMetadata {
-            size,
+            unpacked_size: size,
             data_start_address,
             kind,
+            packed_size: None,
         })
     }
 
@@ -602,9 +602,10 @@ impl PackedObjectMetadata {
 
     fn combine(&self, other: &Self) -> Self {
         Self {
-            size: self.size,
+            unpacked_size: self.unpacked_size,
             data_start_address: self.data_start_address,
             kind: other.kind.clone(),
+            packed_size: self.packed_size,
         }
     }
 }

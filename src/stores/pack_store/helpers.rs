@@ -164,16 +164,19 @@ pub fn read_raw_object_at_address<R>(
     pack_file: &mut BufReader<R>,
     address: u64,
     file_len: u64,
-) -> Result<RawObject, anyhow::Error>
+) -> Result<(RawObject, u64), anyhow::Error>
 where
     R: Read,
     R: Seek,
 {
     let (meta, data) = read_at_address(pack_file, address, file_len)?;
-    construct_raw_object_from_packed(meta, data, pack_file, address, file_len)
+    let Some(packed_size) = meta.packed_size else {
+        return Err(anyhow!("object packed size not present - this shouldn't happen"));
+    };
+    Ok((construct_raw_object_from_packed(meta, data, pack_file, address, file_len)?, packed_size))
 }
 
-pub fn construct_raw_object_from_packed<R>(
+fn construct_raw_object_from_packed<R>(
     metadata: PackedObjectMetadata,
     data: Vec<u8>,
     pack_file: &mut BufReader<R>,
@@ -192,7 +195,7 @@ where
         let combined_meta = metadata.combine(&base_meta);
         let unpacked_metadata = ObjectMetadata::new(
             ObjectKind::try_from(combined_meta.kind)?,
-            combined_meta.size as usize,
+            combined_meta.unpacked_size as usize,
         );
         Ok(RawObject::from_unidentified_data(
             &combine_data(&base_data, &data),
@@ -203,7 +206,7 @@ where
     }
 }
 
-pub fn read_at_address<R>(
+fn read_at_address<R>(
     pack_file: &mut BufReader<R>,
     address: u64,
     file_len: u64,
@@ -212,11 +215,14 @@ where
     R: Read,
     R: Seek,
 {
-    let meta = get_packed_object_metadata(pack_file, address, file_len)?;
+    let mut meta = get_packed_object_metadata(pack_file, address, file_len)?;
     pack_file.seek(SeekFrom::Start(meta.data_start_address))?;
     let mut decompressor = ZlibDecoder::new(pack_file);
-    let mut data = Vec::<u8>::with_capacity(meta.size as usize);
+    let mut data = Vec::<u8>::with_capacity(meta.unpacked_size as usize);
     decompressor.read_to_end(&mut data)?;
+    let compressed_data_length = decompressor.total_in();
+    let packed_size = (meta.data_start_address - address) + compressed_data_length;
+    meta.packed_size = Some(packed_size);
     let reusable_file = decompressor.into_inner();
     if meta.is_base_object() {
         Ok((meta, data))

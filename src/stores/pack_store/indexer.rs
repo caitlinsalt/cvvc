@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::anyhow;
-use flate2::bufread::ZlibDecoder;
 use sha1::{Digest, Sha1};
 
 use super::helpers;
@@ -22,7 +21,7 @@ struct PackIndexEntry {
 impl PackIndexEntry {
     fn from_reader<R>(
         file: &mut BufReader<R>,
-        idx: u64,
+        address: u64,
         file_len: u64,
         pack_order: u32,
     ) -> Result<PackIndexEntry, anyhow::Error>
@@ -30,29 +29,33 @@ impl PackIndexEntry {
         R: Read,
         R: Seek,
     {
-        let object_metadata = helpers::get_packed_object_metadata(file, idx, file_len)?;
-        file.seek(SeekFrom::Start(object_metadata.data_start_address))?;
-        let mut decompressor = ZlibDecoder::new(file);
-        let mut data = Vec::<u8>::with_capacity(object_metadata.size as usize);
-        decompressor.read_to_end(&mut data)?;
-        let data_start_address = object_metadata.data_start_address;
-        let packed_length = (data_start_address - idx) + decompressor.total_in();
-        let mut file = decompressor.into_inner();
-        let raw_object = helpers::construct_raw_object_from_packed(
-            object_metadata,
-            data,
-            &mut file,
-            idx,
-            file_len,
-        )?;
+        
+        let (raw_object, packed_length) = helpers::read_raw_object_at_address(file, address, file_len)?;
+
+        // let object_metadata = helpers::get_packed_object_metadata(file, idx, file_len)?;
+        // file.seek(SeekFrom::Start(object_metadata.data_start_address))?;
+        // let mut decompressor = ZlibDecoder::new(file);
+        // let mut data = Vec::<u8>::with_capacity(object_metadata.unpacked_size as usize);
+        // decompressor.read_to_end(&mut data)?;
+        // let data_start_address = object_metadata.data_start_address;
+        // let packed_length = (data_start_address - idx) + decompressor.total_in();
+        // let mut file = decompressor.into_inner();
+        // let raw_object = helpers::construct_raw_object_from_packed(
+        //     object_metadata,
+        //     data,
+        //     &mut file,
+        //     idx,
+        //     file_len,
+        // )?;
+        
         let mut buf = vec![0u8; packed_length as usize];
-        file.seek(SeekFrom::Start(data_start_address))?;
+        file.seek(SeekFrom::Start(address))?;
         file.read_exact(&mut buf)?;
         let crc = crc32fast::hash(&buf);
 
         Ok(PackIndexEntry {
             object_id: raw_object.object_id().to_string(),
-            pack_offset: idx,
+            pack_offset: address,
             packed_length,
             pack_order,
             crc,
@@ -62,17 +65,21 @@ impl PackIndexEntry {
     // this fn assumes the input is sorted
     fn bucketify(entries: &[PackIndexEntry]) -> [u32; 256] {
         let mut buckets = [0u32; 256];
-        let mut idx = 0;
-        let mut last_bucket = 0;
+        let mut entry_count = 0;
         for entry in entries {
-            idx += 1;
+            entry_count += 1;
             let bucket = usize::from_str_radix(&entry.object_id[..2], 16).unwrap();
-            buckets[bucket] = idx;
-            last_bucket = bucket;
+            buckets[bucket] = entry_count;
         }
-        for i in (last_bucket + 1)..256 {
-            buckets[i] = idx;
+        let mut last_val = 0;
+        for i in 0..256 {
+            if buckets[i] < last_val {
+                buckets[i] = last_val;
+            } else {
+                last_val = buckets[i];
+            }
         }
+        
         buckets
     }
 }
@@ -125,6 +132,7 @@ fn write_out_index<P: AsRef<Path>>(
     write_crcs(&mut writer, &mut hasher, &entries)?;
     write_offsets(&mut writer, &mut hasher, &entries)?;
     write_conclusion(&mut writer, hasher, pack_checksum)?;
+    writer.flush()?;
     Ok(())
 }
 
@@ -140,7 +148,8 @@ where
     let mut hasher = hasher;
     hasher.update(pack_checksum);
     writer.write_all(pack_checksum)?;
-    writer.write_all(&hasher.finalize())?;
+    let checksum = hasher.finalize();
+    writer.write_all(&checksum)?;
     Ok(())
 }
 
@@ -180,7 +189,8 @@ where
     H: Digest,
 {
     for e in entries {
-        let obj_id_bytes = e.object_id.bytes().collect::<Vec<u8>>();
+        
+        let obj_id_bytes = hex::decode(&e.object_id)?;
         hasher.update(&obj_id_bytes);
         writer.write_all(&obj_id_bytes)?;
     }
@@ -255,6 +265,7 @@ fn write_out_rev_index<P: AsRef<Path>>(
     write_rev_index_header(&mut writer, &mut hasher)?;
     write_rev_index_entries(&mut writer, &mut hasher, &entries)?;
     write_conclusion(&mut writer, hasher, pack_checksum)?;
+    writer.flush()?;
     Ok(())
 }
 
