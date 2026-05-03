@@ -4,7 +4,6 @@
 //! and that use SHA-1 object IDs.
 
 use anyhow::anyhow;
-use flate2::bufread::ZlibDecoder;
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -14,8 +13,8 @@ use std::{
 };
 
 use crate::{
-    objects::{GitObject, ObjectKind, ObjectMetadata, RawObject},
-    stores::{pack_store::helpers::index_file_name, ObjectStore},
+    objects::{GitObject, ObjectKind, RawObject},
+    stores::ObjectStore,
 };
 
 mod helpers;
@@ -58,9 +57,10 @@ impl PackStore {
         if !primary_file.is_file() {
             return Err(anyhow!("pack file does not exist"));
         }
-        let index_file = index_file_name(base_path, pack_name);
+        let index_file = helpers::index_file_name(base_path, pack_name);
         if !index_file.is_file() {
             if !index_file.exists() {
+                println!("Reindexing pack {}", pack_name);
                 indexer::index(base_path, pack_name)?;
             } else {
                 return Err(anyhow!("pack file exists but is not a file"));
@@ -131,7 +131,7 @@ impl PackStore {
         index_file.rewind()?;
         let mut buf = [0u8; 8];
         index_file.read_exact(&mut buf)?;
-        Ok(buf == [255u8, 116, 79, 99, 0, 0, 0, 2])
+        Ok(buf == helpers::INDEX_HEADER)
     }
 
     fn get_index_offset_range<R>(

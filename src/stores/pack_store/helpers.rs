@@ -11,20 +11,26 @@ use crate::objects::{ObjectKind, ObjectMetadata, RawObject};
 
 use super::{PackedObjectMetadata, PackedObjectType, PackedObjectTypeOnly};
 
+pub const INDEX_HEADER: [u8; 8] = [255, 116, 79, 99, 0, 0, 0, 2];
+pub const REV_INDEX_HEADER: [u8; 12] = [0x52, 0x49, 0x44, 0x58, 0, 0, 0, 1, 0, 0, 0, 1];
+
 /// Given a directory and a pack name, returns the full path to the primary packfile.
 pub fn primary_file_name<P: AsRef<Path>>(base_path: P, pack_name: &str) -> PathBuf {
-    base_path
-        .as_ref()
-        .join(pack_name)
-        .with_added_extension("pack")
+    file_path_with_extension(base_path, pack_name, "pack")
 }
 
 /// Given a directory and a pack name, returns the full path to the pack index file.
 pub fn index_file_name<P: AsRef<Path>>(base_path: P, pack_name: &str) -> PathBuf {
-    base_path
-        .as_ref()
-        .join(pack_name)
-        .with_added_extension("idx")
+    file_path_with_extension(base_path, pack_name, "idx")
+}
+
+/// Given a directory and a pack name, returns the full path to the pack reverse index file.
+pub fn rev_index_file_name<P: AsRef<Path>>(base_path: P, pack_name: &str) -> PathBuf {
+    file_path_with_extension(base_path, pack_name, "rev")
+}
+
+fn file_path_with_extension<P: AsRef<Path>>(base_path: P, pack_name: &str, ext: &str) -> PathBuf {
+    base_path.as_ref().join(pack_name).with_added_extension(ext)
 }
 
 /// Open a file and return a [`BufReader<File>`].
