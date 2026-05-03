@@ -52,12 +52,12 @@ impl TryFrom<&[u8]> for ObjectMetadata {
     /// - the data does not contain a space character
     /// - the data does not contain a zero byte
     /// - the data before the first space character is not a valid object type tag
-    /// (one of `blob`, `commit`, `tree` or `tag`)
+    ///   (one of `blob`, `commit`, `tree` or `tag`)
     /// - the data between the first space character and the first zero byte is not
-    /// a valid base-10 number when interpreted as ASCII or as UTF-8
+    ///   a valid base-10 number when interpreted as ASCII or as UTF-8
     /// - the length field's value is greater than [`usize::MAX`]
     /// - the length of the remainder of the data, following the first zero byte,
-    /// does not match the value of the length field.
+    ///   does not match the value of the length field.
     fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
         let type_end_index = data.iter().position(|&x| x == 0x20).ok_or(anyhow!(
             "malformed object: end of object type code not found"
@@ -673,6 +673,12 @@ impl Eq for TreeNode {}
 /// rather than representing an entire directory tree.
 pub struct Tree {
     entries: Vec<TreeNode>,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Tree {

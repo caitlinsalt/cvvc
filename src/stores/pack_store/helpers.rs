@@ -56,10 +56,10 @@ where
     if buf != [80u8, 65, 67, 75, 0, 0, 0, 2] {
         return Ok(false);
     }
-    if item_count.is_some() {
+    if let Some(item_count) = item_count {
         let mut buf = [0u8; 4];
         pack_file.read_exact(&mut buf)?;
-        if item_count.unwrap() != u32::from_be_bytes(buf) {
+        if item_count != u32::from_be_bytes(buf) {
             Ok(false)
         } else {
             Ok(true)

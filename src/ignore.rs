@@ -1,8 +1,19 @@
 use anyhow::Context;
 use glob::Pattern;
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, error::Error, fmt::Display, path::Path, str::FromStr};
 
 use crate::objects::Blob;
+
+#[derive(Debug)]
+pub struct EmptyIgnorePattern {}
+
+impl Display for EmptyIgnorePattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "empty ignore pattern")
+    }
+}
+
+impl Error for EmptyIgnorePattern {}
 
 /// A pattern representing a single line from a Git ignore file.
 ///
@@ -12,14 +23,16 @@ pub struct IgnorePattern {
     exclude: bool,
 }
 
-impl IgnorePattern {
+impl FromStr for IgnorePattern {
+    type Err = EmptyIgnorePattern;
+
     /// Parse a line from a Git ignore file and turn it into an [`IgnorePattern`] object.
     ///
-    /// This function returns `None` if the line is empty or is a comment.
-    pub fn from_str(text: &str) -> Option<Self> {
-        let text = text.trim();
+    /// This function returns `Err` if the line is empty or is a comment.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let text = s.trim();
         if text.is_empty() || text.starts_with("#") {
-            None
+            Err(EmptyIgnorePattern {})
         } else if let Some(t) = text.strip_prefix("!/") {
             Self::patternify(t, false, true)
         } else if let Some(t) = text.strip_prefix("!") {
@@ -32,7 +45,9 @@ impl IgnorePattern {
             Self::patternify(text, true, false)
         }
     }
+}
 
+impl IgnorePattern {
     /// Check a path against a pattern.
     ///
     /// This method returns `Some(true)` if the pattern matches and the path **should** be excluded,
@@ -63,7 +78,7 @@ impl IgnorePattern {
         result
     }
 
-    fn patternify(text: &str, exclude: bool, relative: bool) -> Option<Self> {
+    fn patternify(text: &str, exclude: bool, relative: bool) -> Result<Self, EmptyIgnorePattern> {
         let relative = match relative {
             true => true,
             false => {
@@ -81,7 +96,7 @@ impl IgnorePattern {
             Self::pattern_push_safe(&mut patterns, &format!("**/{text}"));
             Self::pattern_push_safe(&mut patterns, &format!("**/{text}/**"));
         }
-        Some(IgnorePattern { patterns, exclude })
+        Ok(IgnorePattern { patterns, exclude })
     }
 
     fn pattern_push_safe(patterns: &mut Vec<Pattern>, text: &str) {
@@ -129,7 +144,7 @@ impl IgnoreInfo {
                 entry.0,
                 String::from_utf8_lossy(entry.1.data())
                     .lines()
-                    .filter_map(IgnorePattern::from_str)
+                    .filter_map(|x| IgnorePattern::from_str(x).ok())
                     .collect(),
             );
         }
@@ -197,7 +212,7 @@ fn read_ignore_file<P: AsRef<Path>>(path: P) -> Result<Vec<IgnorePattern>, anyho
     let file_contents = std::fs::read_to_string(path).context("error reading ignore file")?;
     Ok(file_contents
         .lines()
-        .filter_map(IgnorePattern::from_str)
+        .filter_map(|x| IgnorePattern::from_str(x).ok())
         .collect())
 }
 

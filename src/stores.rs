@@ -118,8 +118,8 @@ impl FromStr for BranchKind {
     /// The inverse of [`BranchKind::fmt`], this function carries out the following conversion:
     /// - if the string starts `refs/heads/` it returns [`BranchKind::Local`]
     /// - if the string starts with `refs/remotes/` and contains at least one following character,
-    /// it returns [`BranchKind::Remote`], taking the string after the second `/` and up to (but not
-    /// including) the third `/` as the remote name.
+    ///   it returns [`BranchKind::Remote`], taking the string after the second `/` and up to (but not
+    ///   including) the third `/` as the remote name.
     ///
     /// # Errors
     ///

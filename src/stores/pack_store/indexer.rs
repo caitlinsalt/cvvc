@@ -74,11 +74,11 @@ impl PackIndexEntry {
             buckets[bucket] = entry_count;
         }
         let mut last_val = 0;
-        for i in 0..256 {
-            if buckets[i] < last_val {
-                buckets[i] = last_val;
+        for b in &mut buckets {
+            if *b < last_val {
+                *b  = last_val;
             } else {
-                last_val = buckets[i];
+                last_val = *b;
             }
         }
 
@@ -103,8 +103,8 @@ pub fn index<P: AsRef<Path>>(base_path: P, pack_name: &str) -> Result<(), anyhow
         index_entries.push(next_entry);
     }
     index_entries.sort();
-    for i in 0..index_entries.len() {
-        index_entries[i].index_order = i as u32;
+    for (i, item) in index_entries.iter_mut().enumerate() {
+        item.index_order = i as u32;
     }
     let mut pack_checksum = [0u8; 20];
     primary_file.seek(SeekFrom::Start(idx))?;
@@ -132,10 +132,10 @@ fn write_out_index<P: AsRef<Path>>(
     let mut writer = BufWriter::new(file);
     let mut hasher = Sha1::new();
     write_index_header(&mut writer, &mut hasher)?;
-    write_buckets(&mut writer, &mut hasher, &entries)?;
-    write_object_ids(&mut writer, &mut hasher, &entries)?;
-    write_crcs(&mut writer, &mut hasher, &entries)?;
-    write_offsets(&mut writer, &mut hasher, &entries)?;
+    write_buckets(&mut writer, &mut hasher, entries)?;
+    write_object_ids(&mut writer, &mut hasher, entries)?;
+    write_crcs(&mut writer, &mut hasher, entries)?;
+    write_offsets(&mut writer, &mut hasher, entries)?;
     write_conclusion(&mut writer, hasher, pack_checksum)?;
     writer.flush()?;
     Ok(())
@@ -163,7 +163,7 @@ where
     R: Write,
     H: Digest,
 {
-    hasher.update(&helpers::INDEX_HEADER);
+    hasher.update(helpers::INDEX_HEADER);
     writer.write_all(&helpers::INDEX_HEADER)?;
     Ok(())
 }
@@ -178,7 +178,7 @@ where
     H: Digest,
 {
     let buckets = PackIndexEntry::bucketify(entries);
-    let buckets = buckets.map(|v| u32::to_be_bytes(v));
+    let buckets = buckets.map(u32::to_be_bytes);
     hasher.update(buckets.as_flattened());
     writer.write_all(buckets.as_flattened())?;
     Ok(())
@@ -212,7 +212,7 @@ where
 {
     for e in entries {
         let buf = e.crc.to_be_bytes();
-        hasher.update(&buf);
+        hasher.update(buf);
         writer.write_all(&buf)?;
     }
     Ok(())
@@ -238,12 +238,12 @@ where
             e.pack_offset as u32
         };
         let buf = value_to_write.to_be_bytes();
-        hasher.update(&buf);
+        hasher.update(buf);
         writer.write_all(&buf)?;
     }
     for loff in large_offsets {
         let buf = loff.to_be_bytes();
-        hasher.update(&buf);
+        hasher.update(buf);
         writer.write_all(&buf)?;
     }
     Ok(())
@@ -267,7 +267,7 @@ fn write_out_rev_index<P: AsRef<Path>>(
     let mut writer = BufWriter::new(file);
     let mut hasher = Sha1::new();
     write_rev_index_header(&mut writer, &mut hasher)?;
-    write_rev_index_entries(&mut writer, &mut hasher, &entries)?;
+    write_rev_index_entries(&mut writer, &mut hasher, entries)?;
     write_conclusion(&mut writer, hasher, pack_checksum)?;
     writer.flush()?;
     Ok(())
@@ -281,7 +281,7 @@ where
     R: Write,
     H: Digest,
 {
-    hasher.update(&helpers::REV_INDEX_HEADER);
+    hasher.update(helpers::REV_INDEX_HEADER);
     writer.write_all(&helpers::REV_INDEX_HEADER)?;
     Ok(())
 }
@@ -296,10 +296,10 @@ where
     H: Digest,
 {
     let mut resorted_entries = entries.iter().collect::<Vec<_>>();
-    resorted_entries.sort_by(|a, b| a.pack_order.cmp(&b.pack_order));
+    resorted_entries.sort_by_key(|x| x.pack_order);
     for e in resorted_entries {
         let idx_data = e.index_order.to_be_bytes();
-        hasher.update(&idx_data);
+        hasher.update(idx_data);
         writer.write_all(&idx_data)?;
     }
     Ok(())
