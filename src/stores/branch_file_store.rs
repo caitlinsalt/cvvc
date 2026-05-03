@@ -148,7 +148,7 @@ impl From<&BranchSpec> for PathBuf {
     /// This function returns a [`PathBuf`] relative to the repository base path.
     fn from(value: &BranchSpec) -> Self {
         let start = PathBuf::from(&value.kind);
-        start.join(&path_translate_rev(&value.name))
+        start.join(path_translate_rev(&value.name))
     }
 }
 

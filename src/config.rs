@@ -218,12 +218,9 @@ impl GlobalConfig {
         let home_dir = env::var("XDG_CONFIG_HOME")
             .ok()
             .and_then(|d| PathBuf::from_str(&d).ok())
-            .or_else(|| env::home_dir());
-        if home_dir.is_none() {
-            return None;
-        }
-        let home_dir = home_dir.unwrap();
-        Self::find_user_file_in_dir(&home_dir)
+            .or_else(env::home_dir);
+        let home_dir = home_dir.as_ref()?;
+        Self::find_user_file_in_dir(home_dir)
     }
 
     fn find_user_file_in_dir<P: AsRef<Path>>(dir: P) -> Option<PathBuf> {

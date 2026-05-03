@@ -364,7 +364,7 @@ impl Repository {
     /// - a tag name
     /// - a local branch name
     /// - a remote branch name.   Remote branch names are only searched
-    /// if no local branch name match is found.
+    ///   if no local branch name match is found.
     ///
     /// If the `follow_tags` parameter is true and the object is a chunky tag, the method will return
     /// the tag's target.
@@ -569,7 +569,7 @@ impl Repository {
     ///
     /// Returns an error if it encounters any errors reading from the filesystem.
     fn resolve_ref(&self, git_ref: &str) -> Result<Option<String>, anyhow::Error> {
-        let path = self.file(&PathBuf::from_iter(git_ref.split("/")))?;
+        let path = self.file(PathBuf::from_iter(git_ref.split("/")))?;
         if !path.exists() {
             return Ok(None);
         }
@@ -647,7 +647,7 @@ impl Repository {
     ///
     /// An error is returned if there are any issues writing to the repository.
     pub fn create_ref(&self, name: &str, target_name: &str) -> Result<(), anyhow::Error> {
-        let ref_file_path = self.file(&PathBuf::from_iter(["refs", name]))?;
+        let ref_file_path = self.file(PathBuf::from_iter(["refs", name]))?;
         let mut ref_file = File::create(&ref_file_path)?;
         ref_file.write_all(target_name.as_bytes())?;
         ref_file.write_all("\n".as_bytes())?;
@@ -695,13 +695,13 @@ impl Repository {
     /// Ignore ruleset files will be loaded from the following locations:
     /// - in the repository, the file `.git/info/exclude`, if it exists
     /// - if the user's `XDG_CONFIG_HOME` environment variable is set, from
-    /// the file `$XDG_CONFIG_HOME/git/ignore`
+    ///   the file `$XDG_CONFIG_HOME/git/ignore`
     /// - if the user's `XDG_CONFIG_HOME` environment variable is not set,
-    /// from the file `.config/git` in the user's home directory.
+    ///   from the file `.config/git` in the user's home directory.
     /// - any `.gitignore` files in the worktree, *as long as they have already
-    /// been stored in the repository and written to the index*.  They do not have
-    /// to have been committed.  The last-added version of each `.gitignore` file is
-    /// the one which will be used.
+    ///   been stored in the repository and written to the index*.  They do not have
+    ///   to have been committed.  The last-added version of each `.gitignore` file is
+    ///   the one which will be used.
     ///
     /// `.gitignore` files, if any, are loaded as "scoped files".  In other words, their rules
     /// only apply to their parent directory and any subdirectories underneath it.  A `.gitignore`
@@ -919,7 +919,7 @@ impl Repository {
             if entry.mode < 0o100000 {
                 // Directory
                 let subresult = self.flatten_tree_recursive(&entry.object_id, &full_path)?;
-                map.extend(subresult.into_iter());
+                map.extend(subresult);
             } else {
                 map.insert(full_path, entry.object_id.clone());
             }

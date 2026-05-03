@@ -155,7 +155,7 @@ impl IndexEntry {
     pub fn byte_length(&self) -> usize {
         let raw_length = self.object_name.len() + 63;
         // Round up to 8-byte boundary
-        let blocks = if raw_length % 8 != 0 {
+        let blocks = if !raw_length.is_multiple_of(8) {
             (self.object_name.len() + 63) / 8 + 1
         } else {
             raw_length / 8
@@ -169,8 +169,7 @@ impl IndexEntry {
     ///
     /// If this function fails, it returns an [`InvalidIndexEntryError`].  Its [`InvalidIndexEntryError::error_kind`] field gives the underlying cause of the error, as follows:
     ///
-    /// - if the array is too short to contain an entry with a name at least one byte in length, or if it is too short to contain a name of the length
-    /// specified in the name length field, it returns [`InvalidIndexEntryKind::TooShort`]
+    /// - if the array is too short to contain an entry with a name at least one byte in length, or if it is too short to contain a name of the length specified in the name length field, it returns [`InvalidIndexEntryKind::TooShort`]
     /// - if the `ctime` or `mtime` fields are not valid timestamps, it returns [`InvalidIndexEntryKind::UnparseableTimestamp`]
     /// - if the `mode_type` field is not one of the permitted values expressed by [`IndexEntryType`], it returns [`InvalidIndexEntryKind::UnexpectedMode`]
     /// - if the `mode_permissions` field is not zero, octal 644 or octal 755, it returns [`InvalidIndexEntryKind::UnexpectedPermissions`]
@@ -388,6 +387,12 @@ pub struct Index {
     entries: Vec<IndexEntry>,
 }
 
+impl Default for Index {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Index {
     /// Create an empty index
     pub fn new() -> Self {
@@ -413,7 +418,7 @@ impl Index {
     /// - if the data does not start with the correct identification byte sequence, it returns [`InvalidIndexKind::MissingMagic`]
     /// - if the index header does not indicate index version 2, it returns [`InvalidIndexKind::UnsupportedVersion`]
     /// - if any individual index entry cannot be parsed, it returns [`InvalidIndexKind::InvalidEntry`], which contains the
-    /// underlying [`InvalidIndexEntryError`]
+    ///   underlying [`InvalidIndexEntryError`]
     ///
     /// If the data is too short to contain the number of entries specified in the header, the error kind may
     /// be either [`InvalidIndexKind::TooShort`] or [`InvalidIndexKind::InvalidEntry`] depending on whether or not the
