@@ -456,9 +456,54 @@ impl HttpFetchClient {
         net_dump: bool,
     ) -> Result<PktLineSidebandReader, anyhow::Error> {
         match self.protocol_version {
-            Some(ProtocolVersion::V1) => todo!(),
+            Some(ProtocolVersion::V1) => self.fetch_pack_v1(wants, repo, net_dump),
             Some(ProtocolVersion::V2) => self.fetch_pack_v2(wants, repo, net_dump),
             None => Err(anyhow!("get your client to sniff the protocol via fetch_refs_capabilities() before fetching a pack")),
+        }
+    }
+
+    fn fetch_pack_v1(
+        &self,
+        wants: &HashSet<&str>,
+        repo: &Repository,
+        net_dump: bool,
+    ) -> Result<PktLineSidebandReader, anyhow::Error> {
+        let mut common_objects = IndexSet::<String>::new();
+        let our_objects = repo.commits(None)?;
+        let mut topup_size = our_objects.queue_length();
+        let mut our_objects =
+            Self::top_up_common_objects(&mut common_objects, our_objects, topup_size)?;
+        let mut provide_done = false;
+        loop {
+            match self.fetch_pack_v1_call(wants, &common_objects, provide_done, net_dump)? {
+                PackFetchResponse::InfoNeeded(acked) => {
+                    if provide_done {
+                        return Err(anyhow!("ran out of information to send"));
+                    }
+                    Self::scrub_common_objects(&mut common_objects, acked);
+                }
+                PackFetchResponse::Ready(acked) => {
+                    Self::scrub_common_objects(&mut common_objects, acked);
+                    provide_done = true;
+                }
+                PackFetchResponse::Pack(reader) => {
+                    return Ok(reader);
+                }
+            }
+            match our_objects {
+                Some(iter) => {
+                    topup_size = if topup_size < 400 {
+                        topup_size * 2
+                    } else {
+                        topup_size + 400
+                    };
+                    our_objects =
+                        Self::top_up_common_objects(&mut common_objects, iter, topup_size)?;
+                }
+                None => {
+                    provide_done = true;
+                }
+            }
         }
     }
 
@@ -505,6 +550,86 @@ impl HttpFetchClient {
                 }
             }
         }
+    }
+
+    fn fetch_pack_v1_call(&self, wants: &HashSet<&str>, common_objects: &IndexSet<String>, provide_done: bool, net_dump: bool) -> Result<PackFetchResponse, anyhow::Error> {
+        let mut want_list = wants
+            .iter()
+            .map(|s| PackFetchCommand::Want(s.to_string()))
+            .collect::<Vec<_>>();
+        let have_list = common_objects
+            .iter()
+            .map(|s| PackFetchCommand::Have(s.to_string()))
+            .collect::<Vec<_>>();
+        let fetch_url = self.base_url.join("git-upload-pack")?;
+        let cap_list: Vec<String> = self.fetch_pack_v1_capability_list();
+        if let Some(PackFetchCommand::Want(id)) = want_list.first() {
+            want_list[0] = PackFetchCommand::Want(format!("{} {}", id, cap_list.join(" ")));
+        };
+        let mut body_lines: Vec<PktLine> = want_list.iter().map(|w| PktLine::from(w)).collect();
+        for have in have_list {
+            body_lines.push(have.into());
+        }
+        if provide_done {
+            body_lines.push(PktLine::from("done\x0a"));
+        }
+        body_lines.push(PktLine::Flush);
+        
+        if net_dump {
+            for line in &body_lines {
+                println!("S: {line}");
+            }
+        }
+        let body = body_lines
+            .iter()
+            .flat_map(|n| n.bytes())
+            .collect::<Vec<u8>>();
+        let request = self
+            .client
+            .post(fetch_url)
+            .header("Content-Type", "application/x-git-upload-pack-request")
+            .header("Accept", "application/x-git-upload-pack-request")
+            .body(body);
+        let response = request.send()?;
+        println!("Response status is {}", response.status());
+        println!("{response:?}");
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Request failed: {} {}",
+                response.status(),
+                response.text()?
+            ));
+        }
+        let lines = PktLineIterator::from(response).collect::<Vec<Result<PktLine, anyhow::Error>>>();
+        println!("{} lines returned", lines.len());
+        for line in lines {
+            let line = line?;
+            println!("R: {line}");
+        }
+        Err(anyhow!("Cait hasn't written this yet"))
+    }
+
+    fn fetch_pack_v1_capability_list(&self) -> Vec<String> {
+        let mut cap_list: Vec<String> = vec![];
+        if self.capabilities().iter().any(|c| c.key == "no-done") {
+            cap_list.push("no-done".to_string());
+        }
+        if self.capabilities().iter().any(|c| c.key == "side-band-64k") {
+            cap_list.push("side-band-64k".to_string());
+        } else if self.capabilities().iter().any(|c| c.key == "side-band") {
+            cap_list.push("side-band".to_string());
+        }
+        if self.capabilities().iter().any(|c| c.key == "ofs-delta") {
+            cap_list.push("ofs-delta".to_string());
+        }
+        if self.capabilities().iter().any(|c| c.key == "agent") {
+            cap_list.push(format!("agent=cvvc/{}", env!("CARGO_PKG_VERSION")));
+        }
+        if self.capabilities().iter().any(|c| c.key == "include-tag") {
+            cap_list.push("include-tag".to_string());
+        }
+        cap_list.push("object-format=sha1".to_string());
+        cap_list
     }
 
     fn fetch_pack_v2_call(
